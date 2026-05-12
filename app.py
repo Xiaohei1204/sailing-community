@@ -672,11 +672,25 @@ def get_stats():
 
 # ============ 初始化数据库 & 启动 ============
 
-with app.app_context():
-    # 删除旧表重建（模型结构变更后需要）
-    db.drop_all()
-    db.create_all()
-    print('✅ 数据库表已创建/确认')
+def init_db():
+    """安全初始化数据库"""
+    with app.app_context():
+        try:
+            # 尝试直接创建表（如果表不存在）
+            db.create_all()
+            print('✅ 数据库表已创建/确认')
+        except Exception as e:
+            print(f'⚠️ create_all 失败: {e}')
+            print('🔄 尝试重建所有表...')
+            try:
+                db.drop_all()
+                db.create_all()
+                print('✅ 数据库表已重建')
+            except Exception as e2:
+                print(f'❌ 重建失败: {e2}')
+                raise
+
+init_db()
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
