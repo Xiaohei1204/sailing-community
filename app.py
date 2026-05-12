@@ -106,9 +106,8 @@ class Post(db.Model):
     user_id = db.Column(db.String(8), db.ForeignKey('users.id'), nullable=False)
     created_at = db.Column(db.Float, default=time.time)
 
-    tags = db.relationship('Tag', secondary=post_tags, backref=db.backref('posts', lazy='dynamic'))
-    liked_by_users = db.relationship('User', secondary=post_likes, backref=db.backref('liked_posts', lazy='dynamic'))
-    comments_rel = db.relationship('Comment', backref='post', lazy='dynamic')
+    tags = db.relationship('Tag', secondary=post_tags, lazy='subquery')
+    liked_by_users = db.relationship('User', secondary=post_likes, lazy='subquery')
 
     def get_images(self):
         import json
@@ -148,8 +147,6 @@ class Comment(db.Model):
     user_id = db.Column(db.String(8), db.ForeignKey('users.id'), nullable=False)
     content = db.Column(db.Text, nullable=False)
     created_at = db.Column(db.Float, default=time.time)
-
-    author = db.relationship('User', backref='comments')
 
 
 # ============ 工具函数 ============
@@ -652,7 +649,7 @@ def get_tags():
     tags = Tag.query.all()
     result = []
     for t in tags:
-        count = t.posts.count()
+        count = db.session.query(post_tags).filter_by(tag_name=t.name).count()
         if count > 0:
             result.append({'name': t.name, 'count': count})
     result.sort(key=lambda x: x['count'], reverse=True)
@@ -676,6 +673,8 @@ def get_stats():
 # ============ 初始化数据库 & 启动 ============
 
 with app.app_context():
+    # 删除旧表重建（模型结构变更后需要）
+    db.drop_all()
     db.create_all()
     print('✅ 数据库表已创建/确认')
 
