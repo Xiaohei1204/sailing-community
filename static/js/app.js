@@ -128,6 +128,7 @@ function updateAuthModal() {
     document.getElementById('authSubmit').textContent = isLogin ? '登录' : '注册';
     document.getElementById('authSwitchText').textContent = isLogin ? '还没有账号？' : '已有账号？';
     document.getElementById('authSwitchLink').textContent = isLogin ? '注册' : '登录';
+    document.getElementById('forgotPasswordLink').style.display = isLogin ? 'inline' : 'none';
 }
 
 async function submitAuth(e) {
@@ -665,6 +666,108 @@ async function submitBindEmail(e) {
     }
 }
 
+// ============ 忘记密码 ============
+
+function showForgotPassword() {
+    closeAuthModal();
+    document.getElementById('forgotModal').classList.add('show');
+}
+
+function closeForgotModal() {
+    document.getElementById('forgotModal').classList.remove('show');
+    document.getElementById('forgotEmailInput').value = '';
+}
+
+async function submitForgotPassword(e) {
+    e.preventDefault();
+    const email = document.getElementById('forgotEmailInput').value.trim();
+    if (!email) {
+        showToast('请输入邮箱地址', 'error');
+        return;
+    }
+
+    const res = await api('/api/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ email })
+    });
+
+    if (res.success) {
+        closeForgotModal();
+        showToast('重置链接已发送到你的邮箱，请查收', 'success');
+    } else {
+        showToast(res.message, 'error');
+    }
+}
+
+// ============ 重置密码 ============
+
+let resetToken = '';
+
+function showResetModal(token) {
+    resetToken = token;
+    document.getElementById('resetModal').classList.add('show');
+}
+
+function closeResetModal() {
+    document.getElementById('resetModal').classList.remove('show');
+    document.getElementById('resetPasswordInput').value = '';
+    document.getElementById('resetPasswordConfirm').value = '';
+    resetToken = '';
+}
+
+async function submitResetPassword(e) {
+    e.preventDefault();
+    const password = document.getElementById('resetPasswordInput').value.trim();
+    const confirm = document.getElementById('resetPasswordConfirm').value.trim();
+
+    if (password.length < 4) {
+        showToast('密码至少4个字符', 'error');
+        return;
+    }
+    if (password !== confirm) {
+        showToast('两次输入的密码不一致', 'error');
+        return;
+    }
+
+    const res = await api('/api/reset-password', {
+        method: 'POST',
+        body: JSON.stringify({ token: resetToken, password })
+    });
+
+    if (res.success) {
+        closeResetModal();
+        showToast('密码重置成功，请使用新密码登录', 'success');
+        // 清除 URL 中的 token
+        window.location.hash = '';
+        // 自动弹出登录框
+        setTimeout(() => showAuthModal('login'), 500);
+    } else {
+        showToast(res.message, 'error');
+    }
+}
+
+// 检查 URL 中是否有重置密码 token
+function checkResetToken() {
+    const hash = window.location.hash;
+    if (hash.startsWith('#/reset-password?token=')) {
+        const token = hash.replace('#/reset-password?token=', '');
+        if (token) {
+            // 先验证 token 是否有效
+            api('/api/verify-reset-token', {
+                method: 'POST',
+                body: JSON.stringify({ token })
+            }).then(res => {
+                if (res.success) {
+                    showResetModal(token);
+                } else {
+                    showToast(res.message || '重置链接无效', 'error');
+                    window.location.hash = '';
+                }
+            });
+        }
+    }
+}
+
 // ============ 标签和统计 ============
 async function loadTags() {
     const res = await api('/api/tags');
@@ -742,6 +845,7 @@ function escapeHtml(text) {
 
 // ============ 初始化 ============
 document.addEventListener('DOMContentLoaded', async () => {
+    checkResetToken();
     await checkLogin();
     await loadPosts();
     await loadTags();

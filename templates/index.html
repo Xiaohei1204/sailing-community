@@ -183,7 +183,56 @@
             <div class="auth-switch">
                 <span id="authSwitchText">还没有账号？</span>
                 <a href="#" id="authSwitchLink" onclick="switchAuthMode()">注册</a>
+                <span id="forgotPasswordLink" style="margin-left:auto">
+                    <a href="#" onclick="showForgotPassword()" style="font-size:0.85rem">忘记密码？</a>
+                </span>
             </div>
+        </div>
+    </div>
+
+    <!-- 忘记密码弹窗 -->
+    <div id="forgotModal" class="modal" onclick="if(event.target===this)closeForgotModal()">
+        <div class="modal-content card">
+            <button class="modal-close" onclick="closeForgotModal()">&times;</button>
+            <div class="auth-header">
+                <span style="font-size:2rem"><i class="fas fa-key"></i></span>
+                <h2>找回密码</h2>
+            </div>
+            <p style="color:var(--text-secondary);font-size:0.9rem;margin-bottom:16px;text-align:center">
+                输入你绑定的邮箱地址，我们将发送重置链接
+            </p>
+            <form onsubmit="submitForgotPassword(event)">
+                <div class="form-group">
+                    <label>邮箱地址</label>
+                    <input type="email" id="forgotEmailInput" placeholder="请输入绑定邮箱" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">发送重置链接</button>
+            </form>
+            <div style="text-align:center;margin-top:12px">
+                <a href="#" onclick="closeForgotModal();showAuthModal('login')" style="color:var(--text-light);font-size:0.85rem">返回登录</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- 重置密码弹窗 -->
+    <div id="resetModal" class="modal" onclick="if(event.target===this)closeResetModal()">
+        <div class="modal-content card">
+            <button class="modal-close" onclick="closeResetModal()">&times;</button>
+            <div class="auth-header">
+                <span style="font-size:2rem"><i class="fas fa-lock"></i></span>
+                <h2>设置新密码</h2>
+            </div>
+            <form onsubmit="submitResetPassword(event)">
+                <div class="form-group">
+                    <label>新密码</label>
+                    <input type="password" id="resetPasswordInput" placeholder="输入新密码（至少4位）" required minlength="4">
+                </div>
+                <div class="form-group">
+                    <label>确认密码</label>
+                    <input type="password" id="resetPasswordConfirm" placeholder="再次输入新密码" required minlength="4">
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">确认重置</button>
+            </form>
         </div>
     </div>
 

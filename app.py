@@ -7,6 +7,8 @@ import os
 import re
 import time
 import uuid
+import hashlib
+import requests as http_requests
 from datetime import datetime
 from functools import wraps
 
@@ -153,6 +155,17 @@ class Comment(db.Model):
     created_at = db.Column(db.Float, default=time.time)
 
 
+class PasswordReset(db.Model):
+    __tablename__ = 'password_resets'
+    id = db.Column(db.String(8), primary_key=True)
+    user_id = db.Column(db.String(8), db.ForeignKey('users.id'), nullable=False)
+    token = db.Column(db.String(64), unique=True, nullable=False)
+    used = db.Column(db.Boolean, default=False)
+    created_at = db.Column(db.Float, default=time.time)
+
+    user = db.relationship('User')
+
+
 # ============ 工具函数 ============
 
 def generate_id():
@@ -185,6 +198,41 @@ def get_or_create_tag(name):
         tag = Tag(name=name)
         db.session.add(tag)
     return tag
+
+
+def send_email(to_email, subject, html_content):
+    """通过 Resend API 发送邮件"""
+    api_key = os.environ.get('RESEND_API_KEY', '')
+    if not api_key:
+        print(f'⚠️ RESEND_API_KEY 未配置，无法发送邮件到 {to_email}')
+        return False
+
+    from_email = os.environ.get('MAIL_FROM', 'sailing@onrender.com')
+
+    try:
+        resp = http_requests.post(
+            'https://api.resend.com/emails',
+            headers={
+                'Authorization': f'Bearer {api_key}',
+                'Content-Type': 'application/json'
+            },
+            json={
+                'from': f'帆船交流平台 <{from_email}>',
+                'to': [to_email],
+                'subject': subject,
+                'html': html_content
+            },
+            timeout=10
+        )
+        if resp.status_code == 200:
+            print(f'✅ 邮件已发送到 {to_email}')
+            return True
+        else:
+            print(f'❌ 邮件发送失败: {resp.text}')
+            return False
+    except Exception as e:
+        print(f'❌ 邮件发送异常: {e}')
+        return False
 
 
 # ============ 登录检查 ============
@@ -308,6 +356,134 @@ def current_user():
         return jsonify({'success': False, 'user': None})
 
     return jsonify({'success': True, 'user': user.to_dict()})
+
+
+@app.route('/api/forgot-password', methods=['POST'])
+def forgot_password():
+    """发送密码重置邮件"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请求数据无效'})
+
+    email = data.get('email', '').strip()
+    if not email:
+        return jsonify({'success': False, 'message': '请输入邮箱地址'})
+
+    # 查找该邮箱对应的用户
+    user = User.query.filter_by(email=email).first()
+    if not user:
+        # 安全考虑：不透露邮箱是否存在
+        return jsonify({'success': True, 'message': '如果该邮箱已绑定，重置链接已发送'})
+
+    # 使旧 token 失效
+    old_resets = PasswordReset.query.filter_by(user_id=user.id, used=False).all()
+    for r in old_resets:
+        r.used = True
+
+    # 生成新 token
+    token = hashlib.sha256(f"{user.id}{time.time()}{uuid.uuid4().hex}".encode()).hexdigest()[:32]
+
+    reset_record = PasswordReset(
+        id=generate_id(),
+        user_id=user.id,
+        token=token
+    )
+    db.session.add(reset_record)
+    db.session.commit()
+
+    # 构建重置链接
+    base_url = os.environ.get('BASE_URL', request.host_url.rstrip('/'))
+    reset_url = f"{base_url}/#/reset-password?token={token}"
+
+    # 发送邮件
+    html = f"""
+    <div style="max-width:600px;margin:0 auto;font-family:sans-serif;padding:20px">
+        <div style="text-align:center;margin-bottom:30px">
+            <span style="font-size:3rem">⛵</span>
+            <h1 style="color:#0c7bb3;margin:10px 0">帆船交流平台</h1>
+        </div>
+        <div style="background:#f8fafc;border-radius:12px;padding:30px;border:1px solid #e2e8f0">
+            <h2 style="margin-top:0;color:#1e293b">重置你的密码</h2>
+            <p style="color:#64748b;font-size:15px;line-height:1.6">
+                你好 <strong>{user.nickname}</strong>，我们收到了重置密码的请求。<br>
+                点击下方按钮设置新密码，链接 30 分钟内有效：
+            </p>
+            <div style="text-align:center;margin:30px 0">
+                <a href="{reset_url}" style="background:#0c7bb3;color:white;padding:12px 32px;border-radius:8px;text-decoration:none;font-size:16px;font-weight:500">
+                    重置密码
+                </a>
+            </div>
+            <p style="color:#94a3b8;font-size:13px">
+                如果按钮无法点击，请复制以下链接到浏览器打开：<br>
+                <a href="{reset_url}" style="color:#0c7bb3;word-break:break-all">{reset_url}</a>
+            </p>
+            <p style="color:#94a3b8;font-size:13px;margin-top:20px">
+                如果你没有请求重置密码，请忽略此邮件。
+            </p>
+        </div>
+        <p style="text-align:center;color:#94a3b8;font-size:12px;margin-top:20px">
+            帆船交流平台 · 与全球帆船爱好者分享航海故事
+        </p>
+    </div>
+    """
+
+    send_email(email, '⛵ 重置你的帆船交流平台密码', html)
+
+    return jsonify({'success': True, 'message': '如果该邮箱已绑定，重置链接已发送'})
+
+
+@app.route('/api/reset-password', methods=['POST'])
+def reset_password():
+    """通过 token 重置密码"""
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请求数据无效'})
+
+    token = data.get('token', '').strip()
+    new_password = data.get('password', '').strip()
+
+    if not token or not new_password:
+        return jsonify({'success': False, 'message': '参数不完整'})
+    if len(new_password) < 4:
+        return jsonify({'success': False, 'message': '密码至少4个字符'})
+
+    # 查找有效的 token
+    reset_record = PasswordReset.query.filter_by(token=token, used=False).first()
+    if not reset_record:
+        return jsonify({'success': False, 'message': '重置链接无效或已过期'})
+
+    # 检查是否过期（30分钟）
+    if time.time() - reset_record.created_at > 1800:
+        reset_record.used = True
+        db.session.commit()
+        return jsonify({'success': False, 'message': '重置链接已过期，请重新申请'})
+
+    # 重置密码
+    user = User.query.get(reset_record.user_id)
+    if not user:
+        return jsonify({'success': False, 'message': '用户不存在'})
+
+    user.password = new_password
+    reset_record.used = True
+    db.session.commit()
+
+    return jsonify({'success': True, 'message': '密码重置成功'})
+
+
+@app.route('/api/verify-reset-token', methods=['POST'])
+def verify_reset_token():
+    """验证重置 token 是否有效"""
+    data = request.get_json()
+    token = data.get('token', '').strip() if data else ''
+
+    reset_record = PasswordReset.query.filter_by(token=token, used=False).first()
+    if not reset_record:
+        return jsonify({'success': False, 'message': '重置链接无效'})
+
+    if time.time() - reset_record.created_at > 1800:
+        return jsonify({'success': False, 'message': '重置链接已过期'})
+
+    return jsonify({'success': True, 'message': '链接有效'})
 
 
 @app.route('/api/user/<user_id>', methods=['GET'])
