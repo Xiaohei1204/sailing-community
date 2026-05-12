@@ -457,8 +457,8 @@ function handleImageUpload(input) {
     }
 
     files.forEach(file => {
-        if (file.size > 10 * 1024 * 1024) {
-            showToast(`${file.name} 超过10MB限制`, 'error');
+        if (file.size > 5 * 1024 * 1024) {
+            showToast(`${file.name} 超过5MB限制，请压缩后上传`, 'error');
             return;
         }
 

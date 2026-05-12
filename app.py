@@ -27,7 +27,7 @@ UPLOAD_FOLDER_IMAGES = os.path.join('static', 'uploads', 'images')
 UPLOAD_FOLDER_VIDEOS = os.path.join('static', 'uploads', 'videos')
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 ALLOWED_VIDEO_EXTENSIONS = {'mp4', 'webm', 'mov', 'avi'}
-MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
 MAX_VIDEO_SIZE = 100 * 1024 * 1024  # 100MB
 
 os.makedirs(UPLOAD_FOLDER_IMAGES, exist_ok=True)
@@ -320,6 +320,7 @@ def create_post():
 
     # 处理图片上传
     images = []
+    oversized_names = []
     image_files = request.files.getlist('images')
     for img_file in image_files[:9]:  # 最多9张图
         if img_file and allowed_file(img_file.filename, ALLOWED_IMAGE_EXTENSIONS):
@@ -328,6 +329,7 @@ def create_post():
             size = img_file.tell()
             img_file.seek(0)
             if size > MAX_IMAGE_SIZE:
+                oversized_names.append(img_file.filename)
                 continue
 
             ext = img_file.filename.rsplit('.', 1)[1].lower()
@@ -381,7 +383,10 @@ def create_post():
     posts.append(post)
     save_data(POSTS_FILE, posts)
 
-    return jsonify({'success': True, 'post_id': post['id']})
+    result = {'success': True, 'post_id': post['id']}
+    if oversized_names:
+        result['warning'] = f"以下图片超过5MB已被跳过：{', '.join(oversized_names)}"
+    return jsonify(result)
 
 
 @app.route('/api/posts/<post_id>', methods=['GET'])
