@@ -7,6 +7,7 @@ import os
 import re
 import time
 import uuid
+import json
 import hashlib
 import requests as http_requests
 from datetime import datetime
@@ -14,12 +15,13 @@ from functools import wraps
 
 from flask import (
     Flask, request, jsonify, send_from_directory,
-    render_template, session
+    render_template, session, send_file
 )
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 from PIL import Image
+from apscheduler.schedulers.background import BackgroundScheduler
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(24).hex())
@@ -893,6 +895,295 @@ def get_stats():
     })
 
 
+# ============ 数据库备份 & 恢复 ============
+
+BACKUP_DIR = os.path.join(os.path.dirname(__file__), 'backups')
+os.makedirs(BACKUP_DIR, exist_ok=True)
+
+
+def export_backup_json():
+    """导出所有数据为 JSON 字典"""
+    with app.app_context():
+        data = {
+            'version': 1,
+            'timestamp': time.time(),
+            'date': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            'users': [],
+            'posts': [],
+            'comments': [],
+            'tags': [],
+            'post_tags': [],
+            'post_likes': [],
+            'password_resets': [],
+        }
+
+        for u in User.query.all():
+            data['users'].append({
+                'id': u.id, 'username': u.username, 'password': u.password,
+                'nickname': u.nickname, 'email': u.email or '',
+                'avatar': u.avatar or '', 'bio': u.bio or '',
+                'created_at': u.created_at,
+            })
+
+        for p in Post.query.all():
+            data['posts'].append({
+                'id': p.id, 'title': p.title, 'content': p.content,
+                'images': p.get_images(), 'videos': p.get_videos(),
+                'likes': p.likes, 'views': p.views, 'user_id': p.user_id,
+                'created_at': p.created_at,
+                'tags': p.get_tags_list(),
+            })
+
+        for c in Comment.query.all():
+            data['comments'].append({
+                'id': c.id, 'post_id': c.post_id, 'user_id': c.user_id,
+                'content': c.content, 'created_at': c.created_at,
+            })
+
+        for t in Tag.query.all():
+            data['tags'].append({'name': t.name})
+
+        # 关联表
+        rows = db.session.execute(db.text('SELECT post_id, tag_name FROM post_tags')).fetchall()
+        for r in rows:
+            data['post_tags'].append({'post_id': r[0], 'tag_name': r[1]})
+
+        rows = db.session.execute(db.text('SELECT post_id, user_id FROM post_likes')).fetchall()
+        for r in rows:
+            data['post_likes'].append({'post_id': r[0], 'user_id': r[1]})
+
+        for pr in PasswordReset.query.all():
+            data['password_resets'].append({
+                'id': pr.id, 'user_id': pr.user_id, 'token': pr.token,
+                'used': pr.used, 'created_at': pr.created_at,
+            })
+
+        return data
+
+
+def save_backup_file():
+    """保存备份到本地文件，返回文件路径"""
+    data = export_backup_json()
+    date_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f'backup_{date_str}.json'
+    filepath = os.path.join(BACKUP_DIR, filename)
+
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+    # 清理旧备份，只保留最近 7 份
+    backup_files = sorted(
+        [f for f in os.listdir(BACKUP_DIR) if f.startswith('backup_') and f.endswith('.json')],
+        reverse=True
+    )
+    for old_file in backup_files[7:]:
+        os.remove(os.path.join(BACKUP_DIR, old_file))
+
+    print(f'💾 数据库备份已保存: {filename} (共 {len(data["users"])} 用户, {len(data["posts"])} 帖子)')
+    return filepath
+
+
+def push_backup_to_github(filepath):
+    """将备份文件推送到 GitHub 仓库（需要 GH_TOKEN 环境变量）"""
+    token = os.environ.get('GH_TOKEN', '')
+    repo = os.environ.get('GH_REPO', 'Xiaohei1204/sailing-community')
+    if not token:
+        return False
+
+    filename = os.path.basename(filepath)
+    branch = os.environ.get('GH_BACKUP_BRANCH', 'main')
+
+    with open(filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    import base64
+    encoded = base64.b64encode(content.encode('utf-8')).decode('utf-8')
+
+    # 先检查文件是否已存在（获取 SHA）
+    api_url = f'https://api.github.com/repos/{repo}/contents/backups/{filename}'
+    headers = {
+        'Authorization': f'token {token}',
+        'Accept': 'application/vnd.github.v3+json',
+    }
+
+    try:
+        # 尝试创建文件
+        payload = {
+            'message': f'💾 自动数据库备份 {filename}',
+            'content': encoded,
+            'branch': branch,
+        }
+
+        # 检查文件是否已存在
+        existing = http_requests.get(api_url, headers=headers, timeout=10)
+        if existing.status_code == 200:
+            payload['sha'] = existing.json().get('sha', '')
+
+        resp = http_requests.put(api_url, headers=headers, json=payload, timeout=30)
+        if resp.status_code in (200, 201):
+            print(f'☁️  备份已推送到 GitHub: backups/{filename}')
+            return True
+        else:
+            print(f'⚠️ GitHub 推送失败: {resp.status_code} {resp.text[:200]}')
+            return False
+    except Exception as e:
+        print(f'⚠️ GitHub 推送异常: {e}')
+        return False
+
+
+def auto_backup_job():
+    """定时备份任务：保存本地 + 推送 GitHub"""
+    try:
+        filepath = save_backup_file()
+        push_backup_to_github(filepath)
+    except Exception as e:
+        print(f'⚠️ 自动备份失败: {e}')
+
+
+@app.route('/api/backup', methods=['GET'])
+@login_required
+def download_backup():
+    """手动下载数据库备份（JSON 文件）"""
+    data = export_backup_json()
+    date_str = datetime.now().strftime('%Y%m%d_%H%M%S')
+    filename = f'backup_{date_str}.json'
+
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False, encoding='utf-8')
+    json.dump(data, tmp, ensure_ascii=False, indent=2)
+    tmp.close()
+
+    return send_file(
+        tmp.name,
+        mimetype='application/json',
+        as_attachment=True,
+        download_name=filename
+    )
+
+
+@app.route('/api/restore', methods=['POST'])
+@login_required
+def restore_backup():
+    """从 JSON 备份文件恢复数据"""
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': '请上传备份文件'})
+
+    file = request.files['file']
+    if not file.filename.endswith('.json'):
+        return jsonify({'success': False, 'message': '只支持 .json 备份文件'})
+
+    try:
+        data = json.load(file)
+    except Exception:
+        return jsonify({'success': False, 'message': '备份文件格式无效'})
+
+    if data.get('version') != 1:
+        return jsonify({'success': False, 'message': '不支持的备份版本'})
+
+    try:
+        # 恢复用户（跳过已存在的）
+        restored = {'users': 0, 'posts': 0, 'comments': 0, 'tags': 0, 'skipped': 0}
+
+        for u_data in data.get('users', []):
+            if User.query.get(u_data['id']):
+                restored['skipped'] += 1
+                continue
+            user = User(
+                id=u_data['id'], username=u_data['username'],
+                password=u_data['password'], nickname=u_data['nickname'],
+                email=u_data.get('email', ''), avatar=u_data.get('avatar', ''),
+                bio=u_data.get('bio', '热爱帆船运动'),
+                created_at=u_data.get('created_at', time.time()),
+            )
+            db.session.add(user)
+            restored['users'] += 1
+
+        # 恢复标签
+        for t_data in data.get('tags', []):
+            if not Tag.query.get(t_data['name']):
+                db.session.add(Tag(name=t_data['name']))
+                restored['tags'] += 1
+
+        db.session.flush()  # 确保标签已写入
+
+        # 恢复帖子
+        for p_data in data.get('posts', []):
+            if Post.query.get(p_data['id']):
+                restored['skipped'] += 1
+                continue
+            post = Post(
+                id=p_data['id'], title=p_data['title'], content=p_data['content'],
+                likes=p_data.get('likes', 0), views=p_data.get('views', 0),
+                user_id=p_data['user_id'], created_at=p_data.get('created_at', time.time()),
+            )
+            post.set_images(p_data.get('images', []))
+            post.set_videos(p_data.get('videos', []))
+
+            # 恢复标签关联
+            for tag_name in p_data.get('tags', []):
+                tag_obj = Tag.query.get(tag_name)
+                if tag_obj:
+                    post.tags.append(tag_obj)
+
+            db.session.add(post)
+            restored['posts'] += 1
+
+        db.session.flush()
+
+        # 恢复评论
+        for c_data in data.get('comments', []):
+            if Comment.query.get(c_data['id']):
+                continue
+            db.session.add(Comment(
+                id=c_data['id'], post_id=c_data['post_id'],
+                user_id=c_data['user_id'], content=c_data['content'],
+                created_at=c_data.get('created_at', time.time()),
+            ))
+            restored['comments'] += 1
+
+        # 恢复点赞关联
+        for lk in data.get('post_likes', []):
+            exists = db.session.execute(db.text(
+                "SELECT 1 FROM post_likes WHERE post_id=:pid AND user_id=:uid"
+            ), {'pid': lk['post_id'], 'uid': lk['user_id']}).fetchone()
+            if not exists:
+                db.session.execute(db.text(
+                    "INSERT INTO post_likes (post_id, user_id) VALUES (:pid, :uid)"
+                ), {'pid': lk['post_id'], 'uid': lk['user_id']})
+
+        db.session.commit()
+
+        # 备份恢复后自动再做一次备份
+        save_backup_file()
+
+        return jsonify({
+            'success': True,
+            'message': f"恢复完成：{restored['users']} 用户, {restored['posts']} 帖子, {restored['comments']} 评论, {restored['tags']} 标签",
+            'restored': restored
+        })
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'恢复失败: {str(e)}'})
+
+
+@app.route('/api/backups/list', methods=['GET'])
+@login_required
+def list_backups():
+    """列出本地备份文件"""
+    files = []
+    for f in sorted(os.listdir(BACKUP_DIR), reverse=True):
+        if f.startswith('backup_') and f.endswith('.json'):
+            filepath = os.path.join(BACKUP_DIR, f)
+            size = os.path.getsize(filepath)
+            files.append({
+                'filename': f,
+                'size': f'{size / 1024:.1f}KB',
+                'date': f.replace('backup_', '').replace('.json', '').replace('_', ' '),
+            })
+    return jsonify({'success': True, 'backups': files[:7]})
+
+
 # ============ 初始化数据库 & 启动 ============
 
 def init_db():
@@ -939,6 +1230,20 @@ def init_db():
                 raise
 
 init_db()
+
+# ============ 定时备份调度 ============
+# 启动时立即备份一次
+try:
+    with app.app_context():
+        save_backup_file()
+except Exception as e:
+    print(f'⚠️ 启动备份失败: {e}')
+
+# 每天凌晨 3:00 自动备份
+scheduler = BackgroundScheduler()
+scheduler.add_job(auto_backup_job, 'cron', hour=3, minute=0)
+scheduler.start()
+print('⏰ 每日自动备份已启动（凌晨 3:00）')
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))

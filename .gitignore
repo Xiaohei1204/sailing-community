@@ -7,3 +7,4 @@ static/uploads/
 .env
 instance/
 *.db
+backups/
