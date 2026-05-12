@@ -896,31 +896,46 @@ def get_stats():
 # ============ 初始化数据库 & 启动 ============
 
 def init_db():
-    """安全初始化数据库，自动检测并修复表结构"""
+    """安全初始化数据库，自动迁移表结构（保留旧数据）"""
     with app.app_context():
         try:
             db.create_all()
-            # 检测 users 表是否有 email 列，没有则重建所有表
-            result = db.session.execute(db.text(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_name='users' AND column_name='email'"
-            ))
-            if result.fetchone() is None:
-                print('⚠️ users 表缺少 email 列，重建所有表...')
-                db.drop_all()
-                db.create_all()
-                print('✅ 数据库表已重建')
+
+            # 检查并迁移：添加 email 列
+            email_exists = False
+            is_postgres = 'postgresql' in str(db.engine.url)
+
+            if is_postgres:
+                result = db.session.execute(db.text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='users' AND column_name='email'"
+                ))
+                email_exists = result.fetchone() is not None
             else:
-                print('✅ 数据库表已创建/确认')
+                # SQLite 方式
+                result = db.session.execute(db.text("PRAGMA table_info(users)"))
+                email_exists = any(row[1] == 'email' for row in result)
+
+            if not email_exists:
+                print('🔄 迁移：为 users 表添加 email 列（保留旧数据）...')
+                db.session.execute(db.text(
+                    "ALTER TABLE users ADD COLUMN email VARCHAR(120) DEFAULT ''"
+                ))
+                db.session.commit()
+                print('✅ email 列已添加，旧数据完整保留')
+            else:
+                print('✅ 数据库表结构正常')
+
         except Exception as e:
-            print(f'⚠️ 初始化失败: {e}')
-            print('🔄 尝试重建所有表...')
-            try:
-                db.drop_all()
+            err = str(e)
+            if 'does not exist' in err and 'users' in err:
+                print('🔄 users 表不存在，创建所有表...')
                 db.create_all()
-                print('✅ 数据库表已重建')
-            except Exception as e2:
-                print(f'❌ 重建失败: {e2}')
+                print('✅ 数据库表已创建')
+            elif 'already exists' in err or 'duplicate' in err:
+                print('✅ 列已存在，跳过迁移')
+            else:
+                print(f'⚠️ 数据库初始化异常: {e}')
                 raise
 
 init_db()
