@@ -1,20 +1,20 @@
 """
-帆船交流平台 - 后端主程序
-Sailing Community Platform - Flask Backend
+帆船交流平台 - 后端主程序（PostgreSQL 持久化版本）
+Sailing Community Platform - Flask Backend with SQLAlchemy
 """
 
 import os
-import json
-import uuid
 import time
+import uuid
 from datetime import datetime
 from functools import wraps
 
 from flask import (
     Flask, request, jsonify, send_from_directory,
-    render_template, redirect, url_for, session
+    render_template, session
 )
 from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
 from werkzeug.utils import secure_filename
 from PIL import Image
 
@@ -22,7 +22,27 @@ app = Flask(__name__, static_folder='static', template_folder='templates')
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(24).hex())
 CORS(app)
 
-# 配置
+# ============ 数据库配置 ============
+database_url = os.environ.get('DATABASE_URL', '')
+# Render 的 PostgreSQL URL 是 postgres://，SQLAlchemy 1.4+ 需要 postgresql://
+if database_url and database_url.startswith('postgres://'):
+    database_url = database_url.replace('postgres://', 'postgresql://', 1)
+
+if database_url:
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+else:
+    # 本地开发用 SQLite
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sailing.db'
+
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 300,
+}
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db = SQLAlchemy(app)
+
+# ============ 上传配置 ============
 UPLOAD_FOLDER_IMAGES = os.path.join('static', 'uploads', 'images')
 UPLOAD_FOLDER_VIDEOS = os.path.join('static', 'uploads', 'videos')
 ALLOWED_IMAGE_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
@@ -33,28 +53,101 @@ MAX_VIDEO_SIZE = 100 * 1024 * 1024  # 100MB
 os.makedirs(UPLOAD_FOLDER_IMAGES, exist_ok=True)
 os.makedirs(UPLOAD_FOLDER_VIDEOS, exist_ok=True)
 
-# 数据存储文件
-DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
-os.makedirs(DATA_DIR, exist_ok=True)
 
-USERS_FILE = os.path.join(DATA_DIR, 'users.json')
-POSTS_FILE = os.path.join(DATA_DIR, 'posts.json')
-COMMENTS_FILE = os.path.join(DATA_DIR, 'comments.json')
+# ============ 数据库模型 ============
+
+class User(db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.String(8), primary_key=True)
+    username = db.Column(db.String(20), unique=True, nullable=False)
+    password = db.Column(db.String(200), nullable=False)
+    nickname = db.Column(db.String(50), nullable=False)
+    avatar = db.Column(db.String(500), default='')
+    bio = db.Column(db.String(500), default='热爱帆船运动')
+    created_at = db.Column(db.Float, default=time.time)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'username': self.username,
+            'nickname': self.nickname,
+            'avatar': self.avatar or '',
+            'bio': self.bio or ''
+        }
 
 
-# ============ 数据操作工具 ============
+# 帖子-标签关联表
+post_tags = db.Table('post_tags',
+    db.Column('post_id', db.String(8), db.ForeignKey('posts.id'), primary_key=True),
+    db.Column('tag_name', db.String(50), primary_key=True)
+)
 
-def load_data(filepath):
-    if os.path.exists(filepath):
-        with open(filepath, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return []
+# 帖子-点赞用户关联表
+post_likes = db.Table('post_likes',
+    db.Column('post_id', db.String(8), db.ForeignKey('posts.id'), primary_key=True),
+    db.Column('user_id', db.String(8), db.ForeignKey('users.id'), primary_key=True)
+)
 
 
-def save_data(filepath, data):
-    with open(filepath, 'w', encoding='utf-8') as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+class Post(db.Model):
+    __tablename__ = 'posts'
+    id = db.Column(db.String(8), primary_key=True)
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    images = db.Column(db.Text, default='[]')  # JSON 数组字符串
+    videos = db.Column(db.Text, default='[]')  # JSON 数组字符串
+    likes = db.Column(db.Integer, default=0)
+    views = db.Column(db.Integer, default=0)
+    user_id = db.Column(db.String(8), db.ForeignKey('users.id'), nullable=False)
+    created_at = db.Column(db.Float, default=time.time)
 
+    tags = db.relationship('Tag', secondary=post_tags, backref=db.backref('posts', lazy='dynamic'))
+    liked_by_users = db.relationship('User', secondary=post_likes, backref=db.backref('liked_posts', lazy='dynamic'))
+    comments_rel = db.relationship('Comment', backref='post', lazy='dynamic')
+
+    def get_images(self):
+        import json
+        try:
+            return json.loads(self.images)
+        except:
+            return []
+
+    def set_images(self, val):
+        import json
+        self.images = json.dumps(val, ensure_ascii=False)
+
+    def get_videos(self):
+        import json
+        try:
+            return json.loads(self.videos)
+        except:
+            return []
+
+    def set_videos(self, val):
+        import json
+        self.videos = json.dumps(val, ensure_ascii=False)
+
+    def get_tags_list(self):
+        return [t.name for t in self.tags]
+
+
+class Tag(db.Model):
+    __tablename__ = 'tags'
+    name = db.Column(db.String(50), primary_key=True)
+
+
+class Comment(db.Model):
+    __tablename__ = 'comments'
+    id = db.Column(db.String(8), primary_key=True)
+    post_id = db.Column(db.String(8), db.ForeignKey('posts.id'), nullable=False)
+    user_id = db.Column(db.String(8), db.ForeignKey('users.id'), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.Float, default=time.time)
+
+    author = db.relationship('User', backref='comments')
+
+
+# ============ 工具函数 ============
 
 def generate_id():
     return str(uuid.uuid4())[:8]
@@ -65,7 +158,6 @@ def allowed_file(filename, allowed_ext):
 
 
 def time_ago(timestamp):
-    """将时间戳转换为友好时间"""
     now = time.time()
     diff = now - timestamp
     if diff < 60:
@@ -79,6 +171,14 @@ def time_ago(timestamp):
     else:
         dt = datetime.fromtimestamp(timestamp)
         return dt.strftime('%Y-%m-%d')
+
+
+def get_or_create_tag(name):
+    tag = Tag.query.get(name)
+    if not tag:
+        tag = Tag(name=name)
+        db.session.add(tag)
+    return tag
 
 
 # ============ 登录检查 ============
@@ -115,36 +215,24 @@ def register():
     if len(password) < 4:
         return jsonify({'success': False, 'message': '密码至少4个字符'})
 
-    users = load_data(USERS_FILE)
-    if any(u['username'] == username for u in users):
+    if User.query.filter_by(username=username).first():
         return jsonify({'success': False, 'message': '用户名已存在'})
 
-    user = {
-        'id': generate_id(),
-        'username': username,
-        'password': password,  # 简易版，生产环境应加密
-        'nickname': nickname,
-        'avatar': '',
-        'bio': '热爱帆船运动',
-        'created_at': time.time()
-    }
-    users.append(user)
-    save_data(USERS_FILE, users)
+    user = User(
+        id=generate_id(),
+        username=username,
+        password=password,
+        nickname=nickname,
+        bio='热爱帆船运动'
+    )
+    db.session.add(user)
+    db.session.commit()
 
-    session['user_id'] = user['id']
-    session['username'] = user['username']
-    session['nickname'] = user['nickname']
+    session['user_id'] = user.id
+    session['username'] = user.username
+    session['nickname'] = user.nickname
 
-    return jsonify({
-        'success': True,
-        'user': {
-            'id': user['id'],
-            'username': user['username'],
-            'nickname': user['nickname'],
-            'avatar': user['avatar'],
-            'bio': user['bio']
-        }
-    })
+    return jsonify({'success': True, 'user': user.to_dict()})
 
 
 @app.route('/api/login', methods=['POST'])
@@ -153,25 +241,15 @@ def login():
     username = data.get('username', '').strip()
     password = data.get('password', '').strip()
 
-    users = load_data(USERS_FILE)
-    user = next((u for u in users if u['username'] == username and u['password'] == password), None)
+    user = User.query.filter_by(username=username, password=password).first()
     if not user:
         return jsonify({'success': False, 'message': '用户名或密码错误'})
 
-    session['user_id'] = user['id']
-    session['username'] = user['username']
-    session['nickname'] = user['nickname']
+    session['user_id'] = user.id
+    session['username'] = user.username
+    session['nickname'] = user.nickname
 
-    return jsonify({
-        'success': True,
-        'user': {
-            'id': user['id'],
-            'username': user['username'],
-            'nickname': user['nickname'],
-            'avatar': user.get('avatar', ''),
-            'bio': user.get('bio', '')
-        }
-    })
+    return jsonify({'success': True, 'user': user.to_dict()})
 
 
 @app.route('/api/logout', methods=['POST'])
@@ -185,44 +263,32 @@ def current_user():
     if 'user_id' not in session:
         return jsonify({'success': False, 'user': None})
 
-    users = load_data(USERS_FILE)
-    user = next((u for u in users if u['id'] == session['user_id']), None)
+    user = User.query.get(session['user_id'])
     if not user:
         session.clear()
         return jsonify({'success': False, 'user': None})
 
-    return jsonify({
-        'success': True,
-        'user': {
-            'id': user['id'],
-            'username': user['username'],
-            'nickname': user['nickname'],
-            'avatar': user.get('avatar', ''),
-            'bio': user.get('bio', '')
-        }
-    })
+    return jsonify({'success': True, 'user': user.to_dict()})
 
 
 @app.route('/api/user/<user_id>', methods=['GET'])
 def get_user(user_id):
-    users = load_data(USERS_FILE)
-    user = next((u for u in users if u['id'] == user_id), None)
+    user = User.query.get(user_id)
     if not user:
         return jsonify({'success': False, 'message': '用户不存在'})
 
-    posts = load_data(POSTS_FILE)
-    user_posts = [p for p in posts if p['user_id'] == user_id]
+    post_count = Post.query.filter_by(user_id=user_id).count()
 
     return jsonify({
         'success': True,
         'user': {
-            'id': user['id'],
-            'username': user['username'],
-            'nickname': user['nickname'],
-            'avatar': user.get('avatar', ''),
-            'bio': user.get('bio', ''),
-            'post_count': len(user_posts),
-            'joined': time_ago(user['created_at'])
+            'id': user.id,
+            'username': user.username,
+            'nickname': user.nickname,
+            'avatar': user.avatar or '',
+            'bio': user.bio or '',
+            'post_count': post_count,
+            'joined': time_ago(user.created_at)
         }
     })
 
@@ -231,73 +297,76 @@ def get_user(user_id):
 @login_required
 def update_profile():
     data = request.get_json()
-    users = load_data(USERS_FILE)
-    user = next((u for u in users if u['id'] == session['user_id']), None)
+    user = User.query.get(session['user_id'])
     if not user:
         return jsonify({'success': False, 'message': '用户不存在'})
 
     if 'nickname' in data:
-        user['nickname'] = data['nickname'].strip() or user['username']
-        session['nickname'] = user['nickname']
+        user.nickname = data['nickname'].strip() or user.username
+        session['nickname'] = user.nickname
     if 'bio' in data:
-        user['bio'] = data['bio'].strip()
+        user.bio = data['bio'].strip()
 
-    save_data(USERS_FILE, users)
-    return jsonify({'success': True, 'user': {
-        'id': user['id'], 'username': user['username'],
-        'nickname': user['nickname'], 'avatar': user.get('avatar', ''),
-        'bio': user['bio']
-    }})
+    db.session.commit()
+    return jsonify({'success': True, 'user': user.to_dict()})
 
 
 # ============ 帖子 API ============
 
 @app.route('/api/posts', methods=['GET'])
 def get_posts():
-    posts = load_data(POSTS_FILE)
-    users = load_data(USERS_FILE)
-    comments = load_data(COMMENTS_FILE)
+    query = Post.query
 
     tag = request.args.get('tag', '').strip()
     keyword = request.args.get('keyword', '').strip()
     user_id = request.args.get('user_id', '').strip()
-    sort = request.args.get('sort', 'latest')  # latest | hot
+    sort = request.args.get('sort', 'latest')
 
     if tag:
-        posts = [p for p in posts if tag in p.get('tags', [])]
-    if keyword:
-        posts = [p for p in posts if keyword.lower() in p['title'].lower() or keyword.lower() in p['content'].lower()]
+        tag_obj = Tag.query.get(tag)
+        if tag_obj:
+            query = query.filter(Post.tags.contains(tag_obj))
+        else:
+            return jsonify({'success': True, 'posts': []})
+
     if user_id:
-        posts = [p for p in posts if p['user_id'] == user_id]
+        query = query.filter_by(user_id=user_id)
 
-    # 排序
+    if keyword:
+        query = query.filter(
+            db.or_(
+                Post.title.ilike(f'%{keyword}%'),
+                Post.content.ilike(f'%{keyword}%')
+            )
+        )
+
     if sort == 'hot':
-        posts.sort(key=lambda p: p.get('likes', 0), reverse=True)
+        query = query.order_by(Post.likes.desc())
     else:
-        posts.sort(key=lambda p: p['created_at'], reverse=True)
+        query = query.order_by(Post.created_at.desc())
 
-    # 附加用户信息和评论数
-    user_map = {u['id']: u for u in users}
+    posts = query.all()
+
     result = []
     for p in posts:
-        author = user_map.get(p['user_id'], {})
-        comment_count = len([c for c in comments if c['post_id'] == p['id']])
+        author = User.query.get(p.user_id)
+        comment_count = Comment.query.filter_by(post_id=p.id).count()
         result.append({
-            'id': p['id'],
-            'title': p['title'],
-            'content': p['content'],
-            'images': p.get('images', []),
-            'videos': p.get('videos', []),
-            'tags': p.get('tags', []),
-            'likes': p.get('likes', 0),
-            'views': p.get('views', 0),
+            'id': p.id,
+            'title': p.title,
+            'content': p.content,
+            'images': p.get_images(),
+            'videos': p.get_videos(),
+            'tags': p.get_tags_list(),
+            'likes': p.likes,
+            'views': p.views,
             'comment_count': comment_count,
-            'created_at': p['created_at'],
-            'time_ago': time_ago(p['created_at']),
+            'created_at': p.created_at,
+            'time_ago': time_ago(p.created_at),
             'author': {
-                'id': author.get('id', ''),
-                'nickname': author.get('nickname', '匿名'),
-                'avatar': author.get('avatar', '')
+                'id': author.id if author else '',
+                'nickname': author.nickname if author else '匿名',
+                'avatar': author.avatar if author else ''
             }
         })
 
@@ -316,15 +385,12 @@ def create_post():
     if not content:
         return jsonify({'success': False, 'message': '内容不能为空'})
 
-    tags = [t.strip() for t in tags_str.split(',') if t.strip()] if tags_str else []
-
     # 处理图片上传
     images = []
     oversized_names = []
     image_files = request.files.getlist('images')
-    for img_file in image_files[:9]:  # 最多9张图
+    for img_file in image_files[:9]:
         if img_file and allowed_file(img_file.filename, ALLOWED_IMAGE_EXTENSIONS):
-            # 检查大小
             img_file.seek(0, 2)
             size = img_file.tell()
             img_file.seek(0)
@@ -336,9 +402,7 @@ def create_post():
             filename = f"{generate_id()}_{int(time.time())}.{ext}"
             filepath = os.path.join(UPLOAD_FOLDER_IMAGES, filename)
 
-            # 保存并压缩图片
             img = Image.open(img_file)
-            # 限制最大宽度
             max_width = 1200
             if img.width > max_width:
                 ratio = max_width / img.width
@@ -351,7 +415,7 @@ def create_post():
     # 处理视频上传
     videos = []
     video_files = request.files.getlist('videos')
-    for vid_file in video_files[:3]:  # 最多3个视频
+    for vid_file in video_files[:3]:
         if vid_file and allowed_file(vid_file.filename, ALLOWED_VIDEO_EXTENSIONS):
             vid_file.seek(0, 2)
             size = vid_file.tell()
@@ -365,25 +429,26 @@ def create_post():
             vid_file.save(filepath)
             videos.append(f'/static/uploads/videos/{filename}')
 
-    post = {
-        'id': generate_id(),
-        'title': title,
-        'content': content,
-        'images': images,
-        'videos': videos,
-        'tags': tags,
-        'likes': 0,
-        'views': 0,
-        'liked_by': [],
-        'user_id': session['user_id'],
-        'created_at': time.time()
-    }
+    post = Post(
+        id=generate_id(),
+        title=title,
+        content=content,
+        user_id=session['user_id']
+    )
+    post.set_images(images)
+    post.set_videos(videos)
 
-    posts = load_data(POSTS_FILE)
-    posts.append(post)
-    save_data(POSTS_FILE, posts)
+    # 处理标签
+    if tags_str:
+        tag_names = [t.strip() for t in tags_str.split(',') if t.strip()]
+        for tag_name in tag_names:
+            tag_obj = get_or_create_tag(tag_name)
+            post.tags.append(tag_obj)
 
-    result = {'success': True, 'post_id': post['id']}
+    db.session.add(post)
+    db.session.commit()
+
+    result = {'success': True, 'post_id': post.id}
     if oversized_names:
         result['warning'] = f"以下图片超过5MB已被跳过：{', '.join(oversized_names)}"
     return jsonify(result)
@@ -391,64 +456,59 @@ def create_post():
 
 @app.route('/api/posts/<post_id>', methods=['GET'])
 def get_post(post_id):
-    posts = load_data(POSTS_FILE)
-    post = next((p for p in posts if p['id'] == post_id), None)
+    post = Post.query.get(post_id)
     if not post:
         return jsonify({'success': False, 'message': '帖子不存在'})
 
     # 增加浏览量
-    post['views'] = post.get('views', 0) + 1
-    save_data(POSTS_FILE, posts)
+    post.views += 1
+    db.session.commit()
 
-    users = load_data(USERS_FILE)
-    comments = load_data(COMMENTS_FILE)
-    user_map = {u['id']: u for u in users}
-
-    author = user_map.get(post['user_id'], {})
+    author = User.query.get(post.user_id)
 
     # 获取评论
-    post_comments = [c for c in comments if c['post_id'] == post_id]
-    post_comments.sort(key=lambda c: c['created_at'])
+    post_comments = Comment.query.filter_by(post_id=post_id).order_by(Comment.created_at).all()
 
     comment_list = []
     for c in post_comments:
-        c_author = user_map.get(c['user_id'], {})
+        c_author = User.query.get(c.user_id)
         comment_list.append({
-            'id': c['id'],
-            'content': c['content'],
-            'created_at': c['created_at'],
-            'time_ago': time_ago(c['created_at']),
+            'id': c.id,
+            'content': c.content,
+            'created_at': c.created_at,
+            'time_ago': time_ago(c.created_at),
             'author': {
-                'id': c_author.get('id', ''),
-                'nickname': c_author.get('nickname', '匿名'),
-                'avatar': c_author.get('avatar', '')
+                'id': c_author.id if c_author else '',
+                'nickname': c_author.nickname if c_author else '匿名',
+                'avatar': c_author.avatar if c_author else ''
             }
         })
 
-    # 检查当前用户是否已点赞
     is_liked = False
     if 'user_id' in session:
-        is_liked = session['user_id'] in post.get('liked_by', [])
+        user = User.query.get(session['user_id'])
+        if user and user in post.liked_by_users:
+            is_liked = True
 
     return jsonify({
         'success': True,
         'post': {
-            'id': post['id'],
-            'title': post['title'],
-            'content': post['content'],
-            'images': post.get('images', []),
-            'videos': post.get('videos', []),
-            'tags': post.get('tags', []),
-            'likes': post.get('likes', 0),
-            'views': post.get('views', 0),
+            'id': post.id,
+            'title': post.title,
+            'content': post.content,
+            'images': post.get_images(),
+            'videos': post.get_videos(),
+            'tags': post.get_tags_list(),
+            'likes': post.likes,
+            'views': post.views,
             'is_liked': is_liked,
             'comment_count': len(post_comments),
-            'created_at': post['created_at'],
-            'time_ago': time_ago(post['created_at']),
+            'created_at': post.created_at,
+            'time_ago': time_ago(post.created_at),
             'author': {
-                'id': author.get('id', ''),
-                'nickname': author.get('nickname', '匿名'),
-                'avatar': author.get('avatar', '')
+                'id': author.id if author else '',
+                'nickname': author.nickname if author else '匿名',
+                'avatar': author.avatar if author else ''
             },
             'comments': comment_list
         }
@@ -458,30 +518,26 @@ def get_post(post_id):
 @app.route('/api/posts/<post_id>', methods=['DELETE'])
 @login_required
 def delete_post(post_id):
-    posts = load_data(POSTS_FILE)
-    post = next((p for p in posts if p['id'] == post_id), None)
+    post = Post.query.get(post_id)
     if not post:
         return jsonify({'success': False, 'message': '帖子不存在'})
-    if post['user_id'] != session['user_id']:
+    if post.user_id != session['user_id']:
         return jsonify({'success': False, 'message': '无权删除'})
 
     # 删除关联文件
-    for img in post.get('images', []):
+    for img in post.get_images():
         img_path = os.path.join(os.path.dirname(__file__), img.lstrip('/'))
         if os.path.exists(img_path):
             os.remove(img_path)
-    for vid in post.get('videos', []):
+    for vid in post.get_videos():
         vid_path = os.path.join(os.path.dirname(__file__), vid.lstrip('/'))
         if os.path.exists(vid_path):
             os.remove(vid_path)
 
-    posts = [p for p in posts if p['id'] != post_id]
-    save_data(POSTS_FILE, posts)
-
     # 删除评论
-    comments = load_data(COMMENTS_FILE)
-    comments = [c for c in comments if c['post_id'] != post_id]
-    save_data(COMMENTS_FILE, comments)
+    Comment.query.filter_by(post_id=post_id).delete()
+    db.session.delete(post)
+    db.session.commit()
 
     return jsonify({'success': True})
 
@@ -491,27 +547,23 @@ def delete_post(post_id):
 @app.route('/api/posts/<post_id>/like', methods=['POST'])
 @login_required
 def toggle_like(post_id):
-    posts = load_data(POSTS_FILE)
-    post = next((p for p in posts if p['id'] == post_id), None)
+    post = Post.query.get(post_id)
     if not post:
         return jsonify({'success': False, 'message': '帖子不存在'})
 
-    user_id = session['user_id']
-    liked_by = post.get('liked_by', [])
+    user = User.query.get(session['user_id'])
 
-    if user_id in liked_by:
-        liked_by.remove(user_id)
-        post['likes'] = max(0, post.get('likes', 1) - 1)
+    if user in post.liked_by_users:
+        post.liked_by_users.remove(user)
+        post.likes = max(0, post.likes - 1)
         liked = False
     else:
-        liked_by.append(user_id)
-        post['likes'] = post.get('likes', 0) + 1
+        post.liked_by_users.append(user)
+        post.likes += 1
         liked = True
 
-    post['liked_by'] = liked_by
-    save_data(POSTS_FILE, posts)
-
-    return jsonify({'success': True, 'liked': liked, 'likes': post['likes']})
+    db.session.commit()
+    return jsonify({'success': True, 'liked': liked, 'likes': post.likes})
 
 
 # ============ 评论 API ============
@@ -525,36 +577,31 @@ def add_comment(post_id):
     if not content:
         return jsonify({'success': False, 'message': '评论内容不能为空'})
 
-    posts = load_data(POSTS_FILE)
-    post = next((p for p in posts if p['id'] == post_id), None)
+    post = Post.query.get(post_id)
     if not post:
         return jsonify({'success': False, 'message': '帖子不存在'})
 
-    comment = {
-        'id': generate_id(),
-        'post_id': post_id,
-        'user_id': session['user_id'],
-        'content': content,
-        'created_at': time.time()
-    }
+    comment = Comment(
+        id=generate_id(),
+        post_id=post_id,
+        user_id=session['user_id'],
+        content=content
+    )
+    db.session.add(comment)
+    db.session.commit()
 
-    comments = load_data(COMMENTS_FILE)
-    comments.append(comment)
-    save_data(COMMENTS_FILE, comments)
-
-    users = load_data(USERS_FILE)
-    user = next((u for u in users if u['id'] == session['user_id']), {})
+    user = User.query.get(session['user_id'])
 
     return jsonify({
         'success': True,
         'comment': {
-            'id': comment['id'],
-            'content': comment['content'],
-            'time_ago': time_ago(comment['created_at']),
+            'id': comment.id,
+            'content': comment.content,
+            'time_ago': time_ago(comment.created_at),
             'author': {
-                'id': user.get('id', ''),
-                'nickname': user.get('nickname', '匿名'),
-                'avatar': user.get('avatar', '')
+                'id': user.id,
+                'nickname': user.nickname,
+                'avatar': user.avatar or ''
             }
         }
     })
@@ -564,40 +611,39 @@ def add_comment(post_id):
 
 @app.route('/api/tags', methods=['GET'])
 def get_tags():
-    posts = load_data(POSTS_FILE)
-    tag_count = {}
-    for p in posts:
-        for tag in p.get('tags', []):
-            tag_count[tag] = tag_count.get(tag, 0) + 1
-
-    # 按数量排序
-    tags = sorted(tag_count.items(), key=lambda x: x[1], reverse=True)
-    return jsonify({'success': True, 'tags': [{'name': t[0], 'count': t[1]} for t in tags]})
+    tags = Tag.query.all()
+    result = []
+    for t in tags:
+        count = t.posts.count()
+        if count > 0:
+            result.append({'name': t.name, 'count': count})
+    result.sort(key=lambda x: x['count'], reverse=True)
+    return jsonify({'success': True, 'tags': result})
 
 
 # ============ 统计 API ============
 
 @app.route('/api/stats', methods=['GET'])
 def get_stats():
-    posts = load_data(POSTS_FILE)
-    users = load_data(USERS_FILE)
-    comments = load_data(COMMENTS_FILE)
     return jsonify({
         'success': True,
         'stats': {
-            'posts': len(posts),
-            'users': len(users),
-            'comments': len(comments)
+            'posts': Post.query.count(),
+            'users': User.query.count(),
+            'comments': Comment.query.count()
         }
     })
 
 
-# ============ 启动 ============
+# ============ 初始化数据库 & 启动 ============
+
+with app.app_context():
+    db.create_all()
+    print('✅ 数据库表已创建/确认')
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
     print('⛵ 帆船交流平台启动中...')
-    print(f'📁 数据目录: {DATA_DIR}')
     print(f'🖼️  图片目录: {UPLOAD_FOLDER_IMAGES}')
     print(f'🎬 视频目录: {UPLOAD_FOLDER_VIDEOS}')
     print(f'🌐 监听端口: {port}')
