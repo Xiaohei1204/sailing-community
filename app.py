@@ -896,14 +896,24 @@ def get_stats():
 # ============ 初始化数据库 & 启动 ============
 
 def init_db():
-    """安全初始化数据库"""
+    """安全初始化数据库，自动检测并修复表结构"""
     with app.app_context():
         try:
-            # 尝试直接创建表（如果表不存在）
             db.create_all()
-            print('✅ 数据库表已创建/确认')
+            # 检测 users 表是否有 email 列，没有则重建所有表
+            result = db.session.execute(db.text(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_name='users' AND column_name='email'"
+            ))
+            if result.fetchone() is None:
+                print('⚠️ users 表缺少 email 列，重建所有表...')
+                db.drop_all()
+                db.create_all()
+                print('✅ 数据库表已重建')
+            else:
+                print('✅ 数据库表已创建/确认')
         except Exception as e:
-            print(f'⚠️ create_all 失败: {e}')
+            print(f'⚠️ 初始化失败: {e}')
             print('🔄 尝试重建所有表...')
             try:
                 db.drop_all()
