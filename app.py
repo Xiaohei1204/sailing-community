@@ -590,8 +590,10 @@ def get_stats():
 # ============ 启动 ============
 
 if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
     print('⛵ 帆船交流平台启动中...')
     print(f'📁 数据目录: {DATA_DIR}')
     print(f'🖼️  图片目录: {UPLOAD_FOLDER_IMAGES}')
     print(f'🎬 视频目录: {UPLOAD_FOLDER_VIDEOS}')
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    print(f'🌐 监听端口: {port}')
+    app.run(host='0.0.0.0', port=port, debug=False)
