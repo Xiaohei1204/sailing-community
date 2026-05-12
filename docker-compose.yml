@@ -1,0 +1,11 @@
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./data:/app/data
+      - ./static/uploads:/app/static/uploads
+    restart: unless-stopped
+    environment:
+      - FLASK_SECRET_KEY=change-this-to-a-random-secret

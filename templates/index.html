@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⛵ 帆船交流平台</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="navbar">
+        <div class="nav-container">
+            <a href="#" class="nav-logo" onclick="showPage('home')">
+                <span class="logo-icon">⛵</span>
+                <span class="logo-text">帆船交流</span>
+            </a>
+            <div class="nav-search">
+                <i class="fas fa-search"></i>
+                <input type="text" id="searchInput" placeholder="搜索帖子..." onkeydown="if(event.key==='Enter')searchPosts()">
+            </div>
+            <div class="nav-actions">
+                <div id="navAuth" class="nav-auth">
+                    <button class="btn btn-outline" onclick="showAuthModal('login')">登录</button>
+                    <button class="btn btn-primary" onclick="showAuthModal('register')">注册</button>
+                </div>
+                <div id="navUser" class="nav-user" style="display:none">
+                    <button class="btn btn-primary" onclick="showPage('create')">
+                        <i class="fas fa-plus"></i> 发帖
+                    </button>
+                    <div class="user-menu" onclick="toggleUserDropdown()">
+                        <div class="user-avatar-small" id="navAvatar"></div>
+                        <span id="navNickname"></span>
+                        <i class="fas fa-chevron-down"></i>
+                    </div>
+                    <div class="user-dropdown" id="userDropdown">
+                        <a href="#" onclick="showPage('profile')"><i class="fas fa-user"></i> 个人主页</a>
+                        <a href="#" onclick="logout()"><i class="fas fa-sign-out-alt"></i> 退出登录</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+        <!-- 首页 -->
+        <div id="homePage" class="page active">
+            <!-- Hero Banner -->
+            <div class="hero-banner">
+                <div class="hero-overlay"></div>
+                <div class="hero-content">
+                    <h1>⛵ 帆船交流平台</h1>
+                    <p>与全球帆船爱好者分享你的航海故事、技巧与精彩瞬间</p>
+                    <div class="hero-stats" id="heroStats"></div>
+                </div>
+            </div>
+
+            <div class="home-layout">
+                <!-- 左侧标签 -->
+                <aside class="sidebar-left">
+                    <div class="card tags-card">
+                        <h3><i class="fas fa-tags"></i> 热门标签</h3>
+                        <div id="tagsContainer" class="tags-list"></div>
+                    </div>
+                </aside>
+
+                <!-- 中间帖子列表 -->
+                <div class="feed-main">
+                    <div class="feed-header">
+                        <div class="feed-tabs">
+                            <button class="feed-tab active" data-sort="latest" onclick="switchSort('latest')">
+                                <i class="fas fa-clock"></i> 最新
+                            </button>
+                            <button class="feed-tab" data-sort="hot" onclick="switchSort('hot')">
+                                <i class="fas fa-fire"></i> 最热
+                            </button>
+                        </div>
+                    </div>
+                    <div id="postsContainer" class="posts-list"></div>
+                    <div id="loadMore" class="load-more" style="display:none">
+                        <button class="btn btn-outline" onclick="loadPosts()">加载更多</button>
+                    </div>
+                </div>
+
+                <!-- 右侧统计 -->
+                <aside class="sidebar-right">
+                    <div class="card stats-card">
+                        <h3><i class="fas fa-chart-bar"></i> 社区统计</h3>
+                        <div id="statsContainer" class="stats-list"></div>
+                    </div>
+                    <div class="card quick-post-card">
+                        <h3><i class="fas fa-pen"></i> 快速发帖</h3>
+                        <p>分享你的帆船故事</p>
+                        <button class="btn btn-primary btn-block" onclick="showPage('create')">
+                            <i class="fas fa-plus"></i> 发布新帖
+                        </button>
+                    </div>
+                </aside>
+            </div>
+        </div>
+
+        <!-- 帖子详情页 -->
+        <div id="detailPage" class="page">
+            <div class="detail-container" id="detailContainer"></div>
+        </div>
+
+        <!-- 发帖页 -->
+        <div id="createPage" class="page">
+            <div class="create-container">
+                <div class="card create-card">
+                    <h2><i class="fas fa-pen-fancy"></i> 发布新帖</h2>
+                    <form id="createForm" onsubmit="submitPost(event)">
+                        <div class="form-group">
+                            <label>标题</label>
+                            <input type="text" id="postTitle" placeholder="给帖子起个标题..." required maxlength="100">
+                        </div>
+                        <div class="form-group">
+                            <label>内容</label>
+                            <textarea id="postContent" placeholder="分享你的帆船故事、技巧或看法..." rows="8" required></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label>标签（用逗号分隔）</label>
+                            <input type="text" id="postTags" placeholder="如：帆船赛事, 航海技巧, 装备评测">
+                        </div>
+                        <div class="form-group">
+                            <label>上传图片（最多9张）</label>
+                            <div class="upload-area" id="imageUploadArea" onclick="document.getElementById('imageInput').click()">
+                                <i class="fas fa-image"></i>
+                                <span>点击或拖拽上传图片</span>
+                                <input type="file" id="imageInput" accept="image/*" multiple hidden onchange="handleImageUpload(this)">
+                            </div>
+                            <div id="imagePreview" class="image-preview"></div>
+                        </div>
+                        <div class="form-group">
+                            <label>上传视频（最多3个）</label>
+                            <div class="upload-area" id="videoUploadArea" onclick="document.getElementById('videoInput').click()">
+                                <i class="fas fa-video"></i>
+                                <span>点击或拖拽上传视频</span>
+                                <input type="file" id="videoInput" accept="video/*" multiple hidden onchange="handleVideoUpload(this)">
+                            </div>
+                            <div id="videoPreview" class="video-preview"></div>
+                        </div>
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-outline" onclick="showPage('home')">取消</button>
+                            <button type="submit" class="btn btn-primary"><i class="fas fa-paper-plane"></i> 发布</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- 个人主页 -->
+        <div id="profilePage" class="page">
+            <div class="profile-container" id="profileContainer"></div>
+        </div>
+    </main>
+
+    <!-- 登录/注册模态框 -->
+    <div id="authModal" class="modal" onclick="if(event.target===this)closeAuthModal()">
+        <div class="modal-content card">
+            <button class="modal-close" onclick="closeAuthModal()">&times;</button>
+            <div class="auth-header">
+                <span class="logo-icon" style="font-size:2rem">⛵</span>
+                <h2 id="authTitle">登录</h2>
+            </div>
+            <form id="authForm" onsubmit="submitAuth(event)">
+                <div class="form-group">
+                    <label>用户名</label>
+                    <input type="text" id="authUsername" placeholder="输入用户名" required>
+                </div>
+                <div class="form-group" id="nicknameGroup" style="display:none">
+                    <label>昵称</label>
+                    <input type="text" id="authNickname" placeholder="输入昵称（可选）">
+                </div>
+                <div class="form-group">
+                    <label>密码</label>
+                    <input type="password" id="authPassword" placeholder="输入密码" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block" id="authSubmit">登录</button>
+            </form>
+            <div class="auth-switch">
+                <span id="authSwitchText">还没有账号？</span>
+                <a href="#" id="authSwitchLink" onclick="switchAuthMode()">注册</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- 图片查看器 -->
+    <div id="imageViewer" class="image-viewer" onclick="closeImageViewer()">
+        <button class="viewer-close">&times;</button>
+        <img id="viewerImage" src="" alt="">
+    </div>
+
+    <!-- Toast 提示 -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
