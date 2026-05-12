@@ -285,7 +285,9 @@ def register():
             return jsonify({'success': False, 'message': '请求数据无效'})
         username = data.get('username', '').strip()
         password = data.get('password', '').strip()
+        confirm_password = data.get('confirm_password', '').strip()
         nickname = data.get('nickname', '').strip() or username
+        email = data.get('email', '').strip()
 
         if not username or not password:
             return jsonify({'success': False, 'message': '用户名和密码不能为空'})
@@ -293,15 +295,27 @@ def register():
             return jsonify({'success': False, 'message': '用户名长度2-20个字符'})
         if len(password) < 4:
             return jsonify({'success': False, 'message': '密码至少4个字符'})
+        if password != confirm_password:
+            return jsonify({'success': False, 'message': '两次输入的密码不一致'})
+        if not email:
+            return jsonify({'success': False, 'message': '请输入邮箱地址'})
+
+        # 邮箱格式校验
+        pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+        if not re.match(pattern, email):
+            return jsonify({'success': False, 'message': '邮箱格式不正确'})
 
         if User.query.filter_by(username=username).first():
             return jsonify({'success': False, 'message': '用户名已存在'})
+        if User.query.filter_by(email=email).first():
+            return jsonify({'success': False, 'message': '该邮箱已被注册'})
 
         user = User(
             id=generate_id(),
             username=username,
             password=password,
             nickname=nickname,
+            email=email,
             bio='热爱帆船运动'
         )
         db.session.add(user)

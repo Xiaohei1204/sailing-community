@@ -124,23 +124,45 @@ function switchAuthMode() {
 function updateAuthModal() {
     const isLogin = state.authMode === 'login';
     document.getElementById('authTitle').textContent = isLogin ? '登录' : '注册';
+    document.getElementById('emailGroup').style.display = isLogin ? 'none' : 'block';
     document.getElementById('nicknameGroup').style.display = isLogin ? 'none' : 'block';
+    document.getElementById('confirmPasswordGroup').style.display = isLogin ? 'none' : 'block';
     document.getElementById('authSubmit').textContent = isLogin ? '登录' : '注册';
     document.getElementById('authSwitchText').textContent = isLogin ? '还没有账号？' : '已有账号？';
     document.getElementById('authSwitchLink').textContent = isLogin ? '注册' : '登录';
     document.getElementById('forgotPasswordLink').style.display = isLogin ? 'inline' : 'none';
+
+    // 注册时邮箱和确认密码必填
+    document.getElementById('authEmail').required = !isLogin;
+    document.getElementById('authConfirmPassword').required = !isLogin;
 }
 
 async function submitAuth(e) {
     e.preventDefault();
     const username = document.getElementById('authUsername').value.trim();
     const password = document.getElementById('authPassword').value.trim();
+    const email = document.getElementById('authEmail').value.trim();
     const nickname = document.getElementById('authNickname').value.trim();
+    const confirm_password = document.getElementById('authConfirmPassword').value.trim();
 
-    const url = state.authMode === 'login' ? '/api/login' : '/api/register';
-    const body = state.authMode === 'login'
+    const isLogin = state.authMode === 'login';
+
+    // 注册时前端校验
+    if (!isLogin) {
+        if (!email) {
+            showToast('请输入邮箱地址', 'error');
+            return;
+        }
+        if (password !== confirm_password) {
+            showToast('两次输入的密码不一致', 'error');
+            return;
+        }
+    }
+
+    const url = isLogin ? '/api/login' : '/api/register';
+    const body = isLogin
         ? { username, password }
-        : { username, password, nickname };
+        : { username, password, confirm_password, email, nickname };
 
     const res = await api(url, {
         method: 'POST',
@@ -151,11 +173,11 @@ async function submitAuth(e) {
         state.currentUser = res.user;
         updateNavUser();
         closeAuthModal();
-        showToast(state.authMode === 'login' ? '登录成功' : '注册成功', 'success');
+        showToast(isLogin ? '登录成功' : '注册成功', 'success');
         if (state.currentPage === 'home') loadPosts();
 
-        // 检查是否绑定邮箱，未绑定则弹出提示
-        if (!res.user.has_email) {
+        // 登录后检测是否绑定邮箱（老用户可能没有）
+        if (isLogin && !res.user.has_email) {
             setTimeout(() => showEmailModal(), 500);
         }
     } else {
