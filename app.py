@@ -84,7 +84,7 @@ class User(db.Model):
 # 帖子-标签关联表
 post_tags = db.Table('post_tags',
     db.Column('post_id', db.String(8), db.ForeignKey('posts.id'), primary_key=True),
-    db.Column('tag_name', db.String(50), primary_key=True)
+    db.Column('tag_name', db.String(50), db.ForeignKey('tags.name'), primary_key=True)
 )
 
 # 帖子-点赞用户关联表
