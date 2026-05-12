@@ -5,3 +5,5 @@ data/
 static/uploads/
 *.log
 .env
+instance/
+*.db
