@@ -192,6 +192,28 @@ def login_required(f):
     return decorated_function
 
 
+# ============ 健康检查 ============
+
+@app.route('/api/health')
+def health_check():
+    try:
+        db.session.execute(db.text('SELECT 1'))
+        db_ok = True
+        db_msg = 'connected'
+    except Exception as e:
+        db_ok = False
+        db_msg = str(e)
+
+    return jsonify({
+        'success': True,
+        'database': {
+            'ok': db_ok,
+            'message': db_msg
+        },
+        'has_database_url': bool(os.environ.get('DATABASE_URL', ''))
+    })
+
+
 # ============ 页面路由 ============
 
 @app.route('/')
