@@ -20,7 +20,12 @@ from PIL import Image
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(24).hex())
-CORS(app)
+CORS(app, supports_credentials=True)
+
+# Session Cookie 配置（HTTPS 环境必须）
+app.config['SESSION_COOKIE_SECURE'] = True
+app.config['SESSION_COOKIE_SAMESITE'] = 'None'
+app.config['SESSION_COOKIE_HTTPONLY'] = True
 
 # ============ 数据库配置 ============
 database_url = os.environ.get('DATABASE_URL', '')
@@ -225,53 +230,64 @@ def index():
 
 @app.route('/api/register', methods=['POST'])
 def register():
-    data = request.get_json()
-    username = data.get('username', '').strip()
-    password = data.get('password', '').strip()
-    nickname = data.get('nickname', '').strip() or username
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'message': '请求数据无效'})
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
+        nickname = data.get('nickname', '').strip() or username
 
-    if not username or not password:
-        return jsonify({'success': False, 'message': '用户名和密码不能为空'})
-    if len(username) < 2 or len(username) > 20:
-        return jsonify({'success': False, 'message': '用户名长度2-20个字符'})
-    if len(password) < 4:
-        return jsonify({'success': False, 'message': '密码至少4个字符'})
+        if not username or not password:
+            return jsonify({'success': False, 'message': '用户名和密码不能为空'})
+        if len(username) < 2 or len(username) > 20:
+            return jsonify({'success': False, 'message': '用户名长度2-20个字符'})
+        if len(password) < 4:
+            return jsonify({'success': False, 'message': '密码至少4个字符'})
 
-    if User.query.filter_by(username=username).first():
-        return jsonify({'success': False, 'message': '用户名已存在'})
+        if User.query.filter_by(username=username).first():
+            return jsonify({'success': False, 'message': '用户名已存在'})
 
-    user = User(
-        id=generate_id(),
-        username=username,
-        password=password,
-        nickname=nickname,
-        bio='热爱帆船运动'
-    )
-    db.session.add(user)
-    db.session.commit()
+        user = User(
+            id=generate_id(),
+            username=username,
+            password=password,
+            nickname=nickname,
+            bio='热爱帆船运动'
+        )
+        db.session.add(user)
+        db.session.commit()
 
-    session['user_id'] = user.id
-    session['username'] = user.username
-    session['nickname'] = user.nickname
+        session['user_id'] = user.id
+        session['username'] = user.username
+        session['nickname'] = user.nickname
 
-    return jsonify({'success': True, 'user': user.to_dict()})
+        return jsonify({'success': True, 'user': user.to_dict()})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'success': False, 'message': f'注册失败: {str(e)}'})
 
 
 @app.route('/api/login', methods=['POST'])
 def login():
-    data = request.get_json()
-    username = data.get('username', '').strip()
-    password = data.get('password', '').strip()
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'message': '请求数据无效'})
+        username = data.get('username', '').strip()
+        password = data.get('password', '').strip()
 
-    user = User.query.filter_by(username=username, password=password).first()
-    if not user:
-        return jsonify({'success': False, 'message': '用户名或密码错误'})
+        user = User.query.filter_by(username=username, password=password).first()
+        if not user:
+            return jsonify({'success': False, 'message': '用户名或密码错误'})
 
-    session['user_id'] = user.id
-    session['username'] = user.username
-    session['nickname'] = user.nickname
+        session['user_id'] = user.id
+        session['username'] = user.username
+        session['nickname'] = user.nickname
 
-    return jsonify({'success': True, 'user': user.to_dict()})
+        return jsonify({'success': True, 'user': user.to_dict()})
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'登录失败: {str(e)}'})
 
 
 @app.route('/api/logout', methods=['POST'])
