@@ -193,6 +193,30 @@
         <img id="viewerImage" src="" alt="">
     </div>
 
+    <!-- 绑定邮箱弹窗 -->
+    <div id="emailModal" class="modal" onclick="if(event.target===this)closeEmailModal()">
+        <div class="modal-content card">
+            <button class="modal-close" onclick="closeEmailModal()">&times;</button>
+            <div class="auth-header">
+                <span style="font-size:2rem"><i class="fas fa-envelope"></i></span>
+                <h2>绑定邮箱</h2>
+            </div>
+            <p style="color:var(--text-secondary);font-size:0.9rem;margin-bottom:16px;text-align:center">
+                绑定邮箱后可接收重要通知，提升账户安全性
+            </p>
+            <form onsubmit="submitBindEmail(event)">
+                <div class="form-group">
+                    <label>邮箱地址</label>
+                    <input type="email" id="bindEmailInput" placeholder="请输入你的邮箱地址" required>
+                </div>
+                <button type="submit" class="btn btn-primary btn-block">确认绑定</button>
+            </form>
+            <div style="text-align:center;margin-top:12px">
+                <a href="#" onclick="closeEmailModal()" style="color:var(--text-light);font-size:0.85rem">稍后再说</a>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast 提示 -->
     <div id="toastContainer" class="toast-container"></div>
 

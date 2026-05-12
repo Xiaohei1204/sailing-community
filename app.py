@@ -4,6 +4,7 @@ Sailing Community Platform - Flask Backend with SQLAlchemy
 """
 
 import os
+import re
 import time
 import uuid
 from datetime import datetime
@@ -67,6 +68,7 @@ class User(db.Model):
     username = db.Column(db.String(20), unique=True, nullable=False)
     password = db.Column(db.String(200), nullable=False)
     nickname = db.Column(db.String(50), nullable=False)
+    email = db.Column(db.String(120), default='')
     avatar = db.Column(db.String(500), default='')
     bio = db.Column(db.String(500), default='热爱帆船运动')
     created_at = db.Column(db.Float, default=time.time)
@@ -76,6 +78,8 @@ class User(db.Model):
             'id': self.id,
             'username': self.username,
             'nickname': self.nickname,
+            'email': self.email or '',
+            'has_email': bool(self.email),
             'avatar': self.avatar or '',
             'bio': self.bio or ''
         }
@@ -343,6 +347,35 @@ def update_profile():
         user.bio = data['bio'].strip()
 
     db.session.commit()
+    return jsonify({'success': True, 'user': user.to_dict()})
+
+
+@app.route('/api/user/bind-email', methods=['POST'])
+@login_required
+def bind_email():
+    data = request.get_json()
+    if not data:
+        return jsonify({'success': False, 'message': '请求数据无效'})
+
+    email = data.get('email', '').strip()
+
+    if not email:
+        return jsonify({'success': False, 'message': '邮箱不能为空'})
+
+    # 简单邮箱格式校验
+    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+    if not re.match(pattern, email):
+        return jsonify({'success': False, 'message': '邮箱格式不正确'})
+
+    # 检查邮箱是否已被其他用户绑定
+    existing = User.query.filter_by(email=email).first()
+    if existing and existing.id != session['user_id']:
+        return jsonify({'success': False, 'message': '该邮箱已被其他用户绑定'})
+
+    user = User.query.get(session['user_id'])
+    user.email = email
+    db.session.commit()
+
     return jsonify({'success': True, 'user': user.to_dict()})
 
 

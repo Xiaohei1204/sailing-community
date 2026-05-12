@@ -84,6 +84,11 @@ async function checkLogin() {
     if (res.success && res.user) {
         state.currentUser = res.user;
         updateNavUser();
+
+        // 未绑定邮箱时弹出提示
+        if (!res.user.has_email) {
+            setTimeout(() => showEmailModal(), 1000);
+        }
     }
 }
 
@@ -147,6 +152,11 @@ async function submitAuth(e) {
         closeAuthModal();
         showToast(state.authMode === 'login' ? '登录成功' : '注册成功', 'success');
         if (state.currentPage === 'home') loadPosts();
+
+        // 检查是否绑定邮箱，未绑定则弹出提示
+        if (!res.user.has_email) {
+            setTimeout(() => showEmailModal(), 500);
+        }
     } else {
         showToast(res.message, 'error');
     }
@@ -620,6 +630,39 @@ async function loadProfile(userId) {
                     <p>还没有发布帖子</p>
                 </div>`}
         </div>`;
+}
+
+// ============ 绑定邮箱 ============
+
+function showEmailModal() {
+    document.getElementById('emailModal').classList.add('show');
+}
+
+function closeEmailModal() {
+    document.getElementById('emailModal').classList.remove('show');
+    document.getElementById('bindEmailInput').value = '';
+}
+
+async function submitBindEmail(e) {
+    e.preventDefault();
+    const email = document.getElementById('bindEmailInput').value.trim();
+    if (!email) {
+        showToast('请输入邮箱地址', 'error');
+        return;
+    }
+
+    const res = await api('/api/user/bind-email', {
+        method: 'POST',
+        body: JSON.stringify({ email })
+    });
+
+    if (res.success) {
+        state.currentUser = res.user;
+        closeEmailModal();
+        showToast('邮箱绑定成功！', 'success');
+    } else {
+        showToast(res.message, 'error');
+    }
 }
 
 // ============ 标签和统计 ============
