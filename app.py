@@ -1224,7 +1224,7 @@ def render_api(method, path, json_data=None, timeout=30):
 
 def find_render_resources():
     """自动查找 Render 上的 Web 服务和数据库"""
-    result = {'service': None, 'database': None}
+    result = {'service': None, 'database': None, 'owner_id': None}
 
     # 查找服务
     services = render_api('GET', '/services') or []
@@ -1233,13 +1233,16 @@ def find_render_resources():
         if svc.get('type') == 'web_server':
             if result['service'] is None or 'sailing' in svc.get('name', '').lower():
                 result['service'] = svc
+                result['owner_id'] = svc.get('ownerId')
 
-    # 查找数据库
-    databases = render_api('GET', '/databases') or []
+    # 查找数据库（Render API 用 /postgres 端点）
+    databases = render_api('GET', '/postgres') or []
     for item in databases:
-        db_item = item.get('database', item)
+        db_item = item.get('postgres', item)
         if result['database'] is None or 'sailing' in db_item.get('name', '').lower():
             result['database'] = db_item
+            if not result['owner_id']:
+                result['owner_id'] = db_item.get('ownerId')
 
     return result
 
@@ -1340,20 +1343,22 @@ def perform_migration():
 
                 old_db_id = old_db.get('id')
                 old_db_name = old_db.get('name', 'unknown')
-                owner_id = old_db.get('ownerId') or svc.get('ownerId')
+                owner_id = resources.get('owner_id') or old_db.get('ownerId') or svc.get('ownerId')
                 region = old_db.get('region', 'oregon')
                 print(f'📦 当前数据库: {old_db_name} (ID: {old_db_id})')
                 print(f'📦 当前服务: {svc.get("name", "unknown")} (ID: {svc.get("id")})')
+                print(f'📦 Owner ID: {owner_id}')
 
-                # 2. 备份当前数据到 GitHub
+                # 2. 备份当前数据到 GitHub（安全第一）
                 print('💾 步骤 1/6: 备份当前数据到 GitHub...')
                 filepath = save_backup_file()
                 github_ok = push_backup_to_github(filepath)
                 if not github_ok:
                     print('❌ GitHub 备份失败，迁移中止（数据安全第一）')
                     return
+                print('✅ GitHub 备份成功')
 
-                # 3. 创建新数据库
+                # 3. 创建新数据库（使用正确的 /postgres 端点）
                 print('🆕 步骤 2/6: 创建新免费数据库...')
                 new_db_payload = {
                     'name': f'sailing-db-{int(time.time())}',
@@ -1361,16 +1366,16 @@ def perform_migration():
                     'plan': 'free',
                     'databaseName': 'sailing',
                     'databaseUser': 'sailing_user',
+                    'ownerId': owner_id,
+                    'version': '18',
                 }
-                if owner_id:
-                    new_db_payload['ownerId'] = owner_id
 
-                new_db = render_api('POST', '/databases', new_db_payload)
+                new_db = render_api('POST', '/postgres', new_db_payload)
                 if not new_db:
                     print('❌ 创建新数据库失败，迁移中止')
                     return
 
-                new_db_info = new_db.get('database', new_db)
+                new_db_info = new_db.get('postgres', new_db)
                 new_db_id = new_db_info.get('id')
                 print(f'✅ 新数据库已创建: ID={new_db_id}')
 
@@ -1380,9 +1385,9 @@ def perform_migration():
                 new_conn_str = ''
                 for i in range(20):
                     time.sleep(30)
-                    result = render_api('GET', f'/databases/{new_db_id}')
+                    result = render_api('GET', f'/postgres/{new_db_id}')
                     if result:
-                        d = result.get('database', result)
+                        d = result.get('postgres', result)
                         status = d.get('status', '')
                         print(f'   数据库状态: {status} ({(i+1)*30}秒)')
                         if status == 'available':
@@ -1399,7 +1404,7 @@ def perform_migration():
                 if new_conn_str.startswith('postgres://'):
                     new_conn_str = new_conn_str.replace('postgres://', 'postgresql://', 1)
 
-                # 5. 更新环境变量
+                # 5. 更新环境变量（使用正确的 /services/{id}/env-vars/{key} 端点）
                 print('🔧 步骤 4/6: 更新 DATABASE_URL 环境变量...')
                 env_ok = render_api('PUT', f'/services/{svc["id"]}/env-vars/DATABASE_URL', {'value': new_conn_str})
                 if not env_ok:
@@ -1410,7 +1415,7 @@ def perform_migration():
                 # 6. 删除旧数据库
                 print('🗑️  步骤 5/6: 删除旧数据库...')
                 if old_db_id:
-                    render_api('DELETE', f'/databases/{old_db_id}')
+                    render_api('DELETE', f'/postgres/{old_db_id}')
                     print(f'✅ 旧数据库 {old_db_name} 已删除')
 
                 # 7. 触发重新部署（新部署启动后会自动从 GitHub 恢复数据）
