@@ -5,12 +5,14 @@ Sailing Community Platform - Flask Backend with SQLAlchemy
 
 import os
 import re
+import sys
 import time
 import uuid
 import json
 import hashlib
+import threading
 import requests as http_requests
-from datetime import datetime
+from datetime import datetime, timezone
 from functools import wraps
 
 from flask import (
@@ -1040,6 +1042,77 @@ def auto_backup_job():
         print(f'⚠️ 自动备份失败: {e}')
 
 
+def restore_from_data(data):
+    """从备份数据字典恢复到数据库（跳过已存在的记录）"""
+    if not data or data.get('version') != 1:
+        print('❌ 备份数据格式无效')
+        return {'users': 0, 'posts': 0, 'comments': 0, 'tags': 0, 'skipped': 0}
+
+    restored = {'users': 0, 'posts': 0, 'comments': 0, 'tags': 0, 'skipped': 0}
+
+    for u_data in data.get('users', []):
+        if User.query.get(u_data['id']):
+            restored['skipped'] += 1
+            continue
+        db.session.add(User(
+            id=u_data['id'], username=u_data['username'],
+            password=u_data['password'], nickname=u_data['nickname'],
+            email=u_data.get('email', ''), avatar=u_data.get('avatar', ''),
+            bio=u_data.get('bio', '热爱帆船运动'),
+            created_at=u_data.get('created_at', time.time()),
+        ))
+        restored['users'] += 1
+
+    for t_data in data.get('tags', []):
+        if not Tag.query.get(t_data['name']):
+            db.session.add(Tag(name=t_data['name']))
+            restored['tags'] += 1
+
+    db.session.flush()
+
+    for p_data in data.get('posts', []):
+        if Post.query.get(p_data['id']):
+            restored['skipped'] += 1
+            continue
+        post = Post(
+            id=p_data['id'], title=p_data['title'], content=p_data['content'],
+            likes=p_data.get('likes', 0), views=p_data.get('views', 0),
+            user_id=p_data['user_id'], created_at=p_data.get('created_at', time.time()),
+        )
+        post.set_images(p_data.get('images', []))
+        post.set_videos(p_data.get('videos', []))
+        for tag_name in p_data.get('tags', []):
+            tag_obj = Tag.query.get(tag_name)
+            if tag_obj:
+                post.tags.append(tag_obj)
+        db.session.add(post)
+        restored['posts'] += 1
+
+    db.session.flush()
+
+    for c_data in data.get('comments', []):
+        if Comment.query.get(c_data['id']):
+            continue
+        db.session.add(Comment(
+            id=c_data['id'], post_id=c_data['post_id'],
+            user_id=c_data['user_id'], content=c_data['content'],
+            created_at=c_data.get('created_at', time.time()),
+        ))
+        restored['comments'] += 1
+
+    for lk in data.get('post_likes', []):
+        exists = db.session.execute(db.text(
+            "SELECT 1 FROM post_likes WHERE post_id=:pid AND user_id=:uid"
+        ), {'pid': lk['post_id'], 'uid': lk['user_id']}).fetchone()
+        if not exists:
+            db.session.execute(db.text(
+                "INSERT INTO post_likes (post_id, user_id) VALUES (:pid, :uid)"
+            ), {'pid': lk['post_id'], 'uid': lk['user_id']})
+
+    db.session.commit()
+    return restored
+
+
 @app.route('/api/backup', methods=['GET'])
 @login_required
 def download_backup():
@@ -1077,91 +1150,17 @@ def restore_backup():
     except Exception:
         return jsonify({'success': False, 'message': '备份文件格式无效'})
 
-    if data.get('version') != 1:
-        return jsonify({'success': False, 'message': '不支持的备份版本'})
-
     try:
-        # 恢复用户（跳过已存在的）
-        restored = {'users': 0, 'posts': 0, 'comments': 0, 'tags': 0, 'skipped': 0}
+        restored = restore_from_data(data)
+        if not restored:
+            return jsonify({'success': False, 'message': '备份版本不支持'})
 
-        for u_data in data.get('users', []):
-            if User.query.get(u_data['id']):
-                restored['skipped'] += 1
-                continue
-            user = User(
-                id=u_data['id'], username=u_data['username'],
-                password=u_data['password'], nickname=u_data['nickname'],
-                email=u_data.get('email', ''), avatar=u_data.get('avatar', ''),
-                bio=u_data.get('bio', '热爱帆船运动'),
-                created_at=u_data.get('created_at', time.time()),
-            )
-            db.session.add(user)
-            restored['users'] += 1
-
-        # 恢复标签
-        for t_data in data.get('tags', []):
-            if not Tag.query.get(t_data['name']):
-                db.session.add(Tag(name=t_data['name']))
-                restored['tags'] += 1
-
-        db.session.flush()  # 确保标签已写入
-
-        # 恢复帖子
-        for p_data in data.get('posts', []):
-            if Post.query.get(p_data['id']):
-                restored['skipped'] += 1
-                continue
-            post = Post(
-                id=p_data['id'], title=p_data['title'], content=p_data['content'],
-                likes=p_data.get('likes', 0), views=p_data.get('views', 0),
-                user_id=p_data['user_id'], created_at=p_data.get('created_at', time.time()),
-            )
-            post.set_images(p_data.get('images', []))
-            post.set_videos(p_data.get('videos', []))
-
-            # 恢复标签关联
-            for tag_name in p_data.get('tags', []):
-                tag_obj = Tag.query.get(tag_name)
-                if tag_obj:
-                    post.tags.append(tag_obj)
-
-            db.session.add(post)
-            restored['posts'] += 1
-
-        db.session.flush()
-
-        # 恢复评论
-        for c_data in data.get('comments', []):
-            if Comment.query.get(c_data['id']):
-                continue
-            db.session.add(Comment(
-                id=c_data['id'], post_id=c_data['post_id'],
-                user_id=c_data['user_id'], content=c_data['content'],
-                created_at=c_data.get('created_at', time.time()),
-            ))
-            restored['comments'] += 1
-
-        # 恢复点赞关联
-        for lk in data.get('post_likes', []):
-            exists = db.session.execute(db.text(
-                "SELECT 1 FROM post_likes WHERE post_id=:pid AND user_id=:uid"
-            ), {'pid': lk['post_id'], 'uid': lk['user_id']}).fetchone()
-            if not exists:
-                db.session.execute(db.text(
-                    "INSERT INTO post_likes (post_id, user_id) VALUES (:pid, :uid)"
-                ), {'pid': lk['post_id'], 'uid': lk['user_id']})
-
-        db.session.commit()
-
-        # 备份恢复后自动再做一次备份
         save_backup_file()
-
         return jsonify({
             'success': True,
             'message': f"恢复完成：{restored['users']} 用户, {restored['posts']} 帖子, {restored['comments']} 评论, {restored['tags']} 标签",
             'restored': restored
         })
-
     except Exception as e:
         db.session.rollback()
         return jsonify({'success': False, 'message': f'恢复失败: {str(e)}'})
@@ -1184,10 +1183,307 @@ def list_backups():
     return jsonify({'success': True, 'backups': files[:7]})
 
 
+# ============ Render API & 28天自动迁移 ============
+
+RENDER_API_BASE = 'https://api.render.com/v1'
+
+
+def _render_headers():
+    """Render API 请求头"""
+    api_key = os.environ.get('RENDER_API_KEY', '')
+    if not api_key:
+        return None
+    return {
+        'Authorization': f'Bearer {api_key}',
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+    }
+
+
+def render_api(method, path, json_data=None, timeout=30):
+    """调用 Render API"""
+    headers = _render_headers()
+    if not headers:
+        return None
+    try:
+        resp = http_requests.request(
+            method, f'{RENDER_API_BASE}{path}',
+            headers=headers, json=json_data, timeout=timeout
+        )
+        if resp.status_code in (200, 201, 204):
+            try:
+                return resp.json()
+            except:
+                return True
+        print(f'Render API {method} {path}: {resp.status_code} {resp.text[:200]}')
+        return None
+    except Exception as e:
+        print(f'Render API 错误: {e}')
+        return None
+
+
+def find_render_resources():
+    """自动查找 Render 上的 Web 服务和数据库"""
+    result = {'service': None, 'database': None}
+
+    # 查找服务
+    services = render_api('GET', '/services') or []
+    for item in services:
+        svc = item.get('service', item)
+        if svc.get('type') == 'web_server':
+            if result['service'] is None or 'sailing' in svc.get('name', '').lower():
+                result['service'] = svc
+
+    # 查找数据库
+    databases = render_api('GET', '/databases') or []
+    for item in databases:
+        db_item = item.get('database', item)
+        if result['database'] is None or 'sailing' in db_item.get('name', '').lower():
+            result['database'] = db_item
+
+    return result
+
+
+def get_db_age_days():
+    """通过 Render API 获取数据库已运行天数"""
+    resources = find_render_resources()
+    db_info = resources.get('database')
+    if not db_info or not db_info.get('createdAt'):
+        return None
+    try:
+        created = datetime.fromisoformat(db_info['createdAt'].replace('Z', '+00:00'))
+        return (datetime.now(timezone.utc) - created).days
+    except:
+        return None
+
+
+def fetch_github_backup():
+    """从 GitHub 仓库下载最新的备份 JSON"""
+    token = os.environ.get('GH_TOKEN', '')
+    repo = os.environ.get('GH_REPO', 'Xiaohei1204/sailing-community')
+    branch = os.environ.get('GH_BACKUP_BRANCH', 'main')
+
+    if not token:
+        print('⚠️ GH_TOKEN 未配置，无法从 GitHub 获取备份')
+        return None
+
+    try:
+        headers = {
+            'Authorization': f'token {token}',
+            'Accept': 'application/vnd.github.v3+json',
+        }
+        resp = http_requests.get(
+            f'https://api.github.com/repos/{repo}/contents/backups',
+            headers=headers, params={'ref': branch}, timeout=15
+        )
+        if resp.status_code != 200:
+            print(f'⚠️ GitHub 备份目录不存在或无法访问: {resp.status_code}')
+            return None
+
+        files = [f for f in resp.json()
+                 if isinstance(f, dict) and f.get('name', '').startswith('backup_') and f.get('name', '').endswith('.json')]
+        if not files:
+            print('⚠️ GitHub 备份目录中没有备份文件')
+            return None
+
+        # 按文件名排序取最新的
+        files.sort(key=lambda f: f.get('name', ''), reverse=True)
+        download_url = files[0].get('download_url')
+        if not download_url:
+            return None
+
+        resp = http_requests.get(download_url, timeout=60)
+        if resp.status_code == 200:
+            print(f'✅ 从 GitHub 下载备份: {files[0]["name"]}')
+            return resp.json()
+        return None
+    except Exception as e:
+        print(f'⚠️ GitHub 备份获取失败: {e}')
+        return None
+
+
+def auto_restore_if_empty():
+    """启动时检测：如果数据库为空，自动从 GitHub 备份恢复"""
+    try:
+        user_count = User.query.count()
+        if user_count > 0:
+            return
+
+        print('🔄 数据库为空，尝试从 GitHub 备份自动恢复...')
+        data = fetch_github_backup()
+        if data:
+            restored = restore_from_data(data)
+            print(f'✅ 自动恢复完成: {restored["users"]} 用户, {restored["posts"]} 帖子, {restored["comments"]} 评论')
+            # 恢复后再备份一次确保安全
+            save_backup_file()
+        else:
+            print('⚠️ 没有找到 GitHub 备份，跳过自动恢复（新数据库）')
+    except Exception as e:
+        print(f'⚠️ 自动恢复异常: {e}')
+
+
+def perform_migration():
+    """28天自动迁移：备份 → 创建新数据库 → 更新环境变量 → 删除旧库 → 重新部署"""
+    def _migrate():
+        with app.app_context():
+            try:
+                print('🚀 ========== 开始28天自动数据库迁移 ==========')
+
+                # 1. 查找当前资源
+                resources = find_render_resources()
+                old_db = resources.get('database')
+                svc = resources.get('service')
+
+                if not old_db or not svc:
+                    print('❌ 找不到 Render 服务或数据库，迁移中止')
+                    return
+
+                old_db_id = old_db.get('id')
+                old_db_name = old_db.get('name', 'unknown')
+                owner_id = old_db.get('ownerId') or svc.get('ownerId')
+                region = old_db.get('region', 'oregon')
+                print(f'📦 当前数据库: {old_db_name} (ID: {old_db_id})')
+                print(f'📦 当前服务: {svc.get("name", "unknown")} (ID: {svc.get("id")})')
+
+                # 2. 备份当前数据到 GitHub
+                print('💾 步骤 1/6: 备份当前数据到 GitHub...')
+                filepath = save_backup_file()
+                github_ok = push_backup_to_github(filepath)
+                if not github_ok:
+                    print('❌ GitHub 备份失败，迁移中止（数据安全第一）')
+                    return
+
+                # 3. 创建新数据库
+                print('🆕 步骤 2/6: 创建新免费数据库...')
+                new_db_payload = {
+                    'name': f'sailing-db-{int(time.time())}',
+                    'region': region,
+                    'plan': 'free',
+                    'databaseName': 'sailing',
+                    'databaseUser': 'sailing_user',
+                }
+                if owner_id:
+                    new_db_payload['ownerId'] = owner_id
+
+                new_db = render_api('POST', '/databases', new_db_payload)
+                if not new_db:
+                    print('❌ 创建新数据库失败，迁移中止')
+                    return
+
+                new_db_info = new_db.get('database', new_db)
+                new_db_id = new_db_info.get('id')
+                print(f'✅ 新数据库已创建: ID={new_db_id}')
+
+                # 4. 等待新数据库就绪（最多 10 分钟）
+                print('⏳ 步骤 3/6: 等待新数据库就绪（约5-10分钟）...')
+                ready = False
+                new_conn_str = ''
+                for i in range(20):
+                    time.sleep(30)
+                    result = render_api('GET', f'/databases/{new_db_id}')
+                    if result:
+                        d = result.get('database', result)
+                        status = d.get('status', '')
+                        print(f'   数据库状态: {status} ({(i+1)*30}秒)')
+                        if status == 'available':
+                            new_conn_str = d.get('connectionString', '')
+                            ready = True
+                            break
+
+                if not ready:
+                    print('❌ 新数据库创建超时（10分钟），迁移中止')
+                    print('⚠️ 请手动到 Render 检查数据库状态')
+                    return
+
+                # 修复连接字符串
+                if new_conn_str.startswith('postgres://'):
+                    new_conn_str = new_conn_str.replace('postgres://', 'postgresql://', 1)
+
+                # 5. 更新环境变量
+                print('🔧 步骤 4/6: 更新 DATABASE_URL 环境变量...')
+                env_ok = render_api('PUT', f'/services/{svc["id"]}/env-vars/DATABASE_URL', {'value': new_conn_str})
+                if not env_ok:
+                    print('❌ 更新环境变量失败，迁移中止')
+                    return
+                print('✅ DATABASE_URL 已更新')
+
+                # 6. 删除旧数据库
+                print('🗑️  步骤 5/6: 删除旧数据库...')
+                if old_db_id:
+                    render_api('DELETE', f'/databases/{old_db_id}')
+                    print(f'✅ 旧数据库 {old_db_name} 已删除')
+
+                # 7. 触发重新部署（新部署启动后会自动从 GitHub 恢复数据）
+                print('🚀 步骤 6/6: 触发重新部署...')
+                render_api('POST', f'/services/{svc["id"]}/deploys', {})
+
+                print('✅ ========== 28天自动迁移完成！==========')
+                print('📌 新部署启动后将自动从 GitHub 备份恢复数据')
+
+            except Exception as e:
+                print(f'❌ 自动迁移异常: {e}')
+
+    thread = threading.Thread(target=_migrate, daemon=True)
+    thread.start()
+
+
+def daily_check_job():
+    """每日定时任务：备份 + 检查数据库年龄 + 触发迁移"""
+    try:
+        # 1. 始终备份
+        auto_backup_job()
+
+        # 2. 如果配置了 Render API，检查数据库年龄
+        if os.environ.get('RENDER_API_KEY'):
+            age = get_db_age_days()
+            if age is not None:
+                print(f'📊 数据库已运行 {age} 天')
+                if age >= 25:
+                    print('⚠️ 数据库即将过期（30天），启动自动迁移！')
+                    perform_migration()
+                elif age >= 20:
+                    print(f'⚠️ 数据库将在 {30 - age} 天后过期')
+    except Exception as e:
+        print(f'⚠️ 每日检查异常: {e}')
+
+
+@app.route('/api/migration/status', methods=['GET'])
+@login_required
+def migration_status():
+    """查看数据库迁移状态"""
+    result = {
+        'success': True,
+        'has_render_api': bool(os.environ.get('RENDER_API_KEY', '')),
+        'has_github_token': bool(os.environ.get('GH_TOKEN', '')),
+        'db_age_days': None,
+        'expires_in': None,
+        'auto_migrate_enabled': bool(os.environ.get('RENDER_API_KEY', '')),
+    }
+
+    if result['has_render_api']:
+        age = get_db_age_days()
+        if age is not None:
+            result['db_age_days'] = age
+            result['expires_in'] = max(0, 30 - age)
+
+    return jsonify(result)
+
+
+@app.route('/api/migration/trigger', methods=['POST'])
+@login_required
+def trigger_migration():
+    """手动触发数据库迁移"""
+    if not os.environ.get('RENDER_API_KEY'):
+        return jsonify({'success': False, 'message': 'RENDER_API_KEY 未配置，无法自动迁移'})
+
+    perform_migration()
+    return jsonify({'success': True, 'message': '迁移已在后台启动，请稍后检查服务状态'})
+
+
 # ============ 初始化数据库 & 启动 ============
 
 def init_db():
-    """安全初始化数据库，自动迁移表结构（保留旧数据）"""
+    """安全初始化数据库，自动迁移表结构（保留旧数据）+ 空库自动恢复"""
     with app.app_context():
         try:
             db.create_all()
@@ -1229,9 +1525,12 @@ def init_db():
                 print(f'⚠️ 数据库初始化异常: {e}')
                 raise
 
+        # 数据库为空时自动从 GitHub 备份恢复
+        auto_restore_if_empty()
+
 init_db()
 
-# ============ 定时备份调度 ============
+# ============ 定时任务调度 ============
 # 启动时立即备份一次
 try:
     with app.app_context():
@@ -1239,11 +1538,24 @@ try:
 except Exception as e:
     print(f'⚠️ 启动备份失败: {e}')
 
-# 每天凌晨 3:00 自动备份
+# 启动时检查数据库年龄（如果配置了 Render API）
+if os.environ.get('RENDER_API_KEY'):
+    try:
+        with app.app_context():
+            age = get_db_age_days()
+            if age is not None:
+                print(f'📊 当前数据库已运行 {age} 天（Render 免费库30天过期）')
+                if age >= 25:
+                    print('⚠️ 数据库即将过期！将在后台启动自动迁移...')
+                    perform_migration()
+    except Exception as e:
+        print(f'⚠️ 数据库年龄检查失败: {e}')
+
+# 每天凌晨 3:00 自动备份 + 检查迁移
 scheduler = BackgroundScheduler()
-scheduler.add_job(auto_backup_job, 'cron', hour=3, minute=0)
+scheduler.add_job(daily_check_job, 'cron', hour=3, minute=0)
 scheduler.start()
-print('⏰ 每日自动备份已启动（凌晨 3:00）')
+print('⏰ 每日定时任务已启动（凌晨 3:00: 备份 + 数据库年龄检查）')
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
@@ -1251,4 +1563,8 @@ if __name__ == '__main__':
     print(f'🖼️  图片目录: {UPLOAD_FOLDER_IMAGES}')
     print(f'🎬 视频目录: {UPLOAD_FOLDER_VIDEOS}')
     print(f'🌐 监听端口: {port}')
+    auto_migrate = '✅ 已启用' if os.environ.get('RENDER_API_KEY') else '❌ 未配置 RENDER_API_KEY'
+    github_backup = '✅ 已启用' if os.environ.get('GH_TOKEN') else '❌ 未配置 GH_TOKEN'
+    print(f'🔄 28天自动迁移: {auto_migrate}')
+    print(f'☁️  GitHub备份推送: {github_backup}')
     app.run(host='0.0.0.0', port=port, debug=False)
