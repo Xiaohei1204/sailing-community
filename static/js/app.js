@@ -715,13 +715,31 @@ async function loadProfile(userId) {
     const initial = user.nickname.charAt(0).toUpperCase();
     const roleBadge = user.role === 'admin' ? '<span class="role-badge admin-badge">站长</span>' : '';
     const avatarClass = user.role === 'admin' ? 'avatar-admin' : '';
+    const isMe = state.currentUser && state.currentUser.id === user.id;
+    const editBtn = isMe ? `<button class="profile-edit-btn" onclick="showEditProfile()"><i class="fas fa-pen"></i> 编辑资料</button>` : '';
 
     container.innerHTML = `
         <button class="back-btn" onclick="showPage('home')"><i class="fas fa-arrow-left"></i> 返回</button>
         <div class="profile-header">
             <div class="profile-avatar ${avatarClass}">${initial}</div>
             <div class="profile-name">${escapeHtml(user.nickname)}${roleBadge}</div>
-            <div class="profile-bio">${escapeHtml(user.bio || '这个人很懒，什么都没写')}</div>
+            <div class="profile-bio" id="profileBio">${escapeHtml(user.bio || '这个人很懒，什么都没写')}</div>
+            ${editBtn}
+            <div id="editProfileForm" style="display:none" class="edit-profile-form">
+                <div class="edit-field">
+                    <label>昵称</label>
+                    <input type="text" id="editNickname" value="${escapeHtml(user.nickname)}" maxlength="20" placeholder="输入昵称">
+                </div>
+                <div class="edit-field">
+                    <label>个性签名</label>
+                    <textarea id="editBio" maxlength="200" placeholder="写点什么介绍自己吧...">${escapeHtml(user.bio || '')}</textarea>
+                    <div class="edit-bio-count"><span id="bioCharCount">${(user.bio || '').length}</span>/200</div>
+                </div>
+                <div class="edit-actions">
+                    <button class="btn btn-outline btn-sm" onclick="cancelEditProfile()">取消</button>
+                    <button class="btn btn-primary btn-sm" onclick="saveEditProfile('${user.id}')">保存</button>
+                </div>
+            </div>
         </div>
         <div class="profile-stats-bar">
             <div class="profile-stat-item">
@@ -745,6 +763,45 @@ async function loadProfile(userId) {
                     <p>还没有发布帖子</p>
                 </div>`}
         </div>`;
+}
+
+// ============ 编辑个人资料 ============
+
+function showEditProfile() {
+    document.getElementById('editProfileForm').style.display = 'block';
+    document.querySelector('.profile-edit-btn').style.display = 'none';
+    document.getElementById('editBio').addEventListener('input', function() {
+        document.getElementById('bioCharCount').textContent = this.value.length;
+    });
+}
+
+function cancelEditProfile() {
+    document.getElementById('editProfileForm').style.display = 'none';
+    document.querySelector('.profile-edit-btn').style.display = '';
+}
+
+async function saveEditProfile(userId) {
+    const nickname = document.getElementById('editNickname').value.trim();
+    const bio = document.getElementById('editBio').value.trim();
+
+    if (!nickname) {
+        showToast('昵称不能为空', 'error');
+        return;
+    }
+
+    const res = await api('/api/user/profile', {
+        method: 'PUT',
+        body: JSON.stringify({ nickname, bio })
+    });
+
+    if (res.success) {
+        state.currentUser = res.user;
+        updateNavUser();
+        showToast('资料已更新', 'success');
+        loadProfile(userId);
+    } else {
+        showToast(res.message, 'error');
+    }
 }
 
 // ============ 绑定邮箱 ============

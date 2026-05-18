@@ -932,7 +932,37 @@ a:hover { text-decoration: underline; }
 }
 
 .profile-name { font-size: 1.5rem; font-weight: 700; }
-.profile-bio { opacity: 0.9; font-size: 0.95rem; margin-top: 4px; }
+.profile-bio { opacity: 0.9; font-size: 0.95rem; margin-top: 4px; white-space: pre-wrap; }
+
+.profile-edit-btn {
+    margin-top: 12px; background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3);
+    color: white; padding: 6px 16px; border-radius: 20px; cursor: pointer; font-size: 0.85rem;
+    display: inline-flex; align-items: center; gap: 6px; transition: background 0.2s;
+}
+.profile-edit-btn:hover { background: rgba(255,255,255,0.25); }
+
+.edit-profile-form {
+    margin-top: 16px; background: rgba(255,255,255,0.1); border-radius: var(--radius-sm);
+    padding: 16px; border: 1px solid rgba(255,255,255,0.2);
+}
+.edit-field { margin-bottom: 12px; }
+.edit-field label {
+    display: block; font-size: 0.8rem; opacity: 0.8; margin-bottom: 4px; font-weight: 500;
+}
+.edit-field input, .edit-field textarea {
+    width: 100%; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3);
+    color: white; border-radius: 6px; padding: 8px 12px; font-size: 0.9rem; font-family: inherit;
+}
+.edit-field input::placeholder, .edit-field textarea::placeholder { color: rgba(255,255,255,0.4); }
+.edit-field input:focus, .edit-field textarea:focus {
+    outline: none; border-color: rgba(255,255,255,0.6); background: rgba(255,255,255,0.15);
+}
+.edit-field textarea { resize: vertical; min-height: 60px; }
+.edit-bio-count { text-align: right; font-size: 0.75rem; opacity: 0.6; margin-top: 2px; }
+.edit-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.edit-actions .btn { color: white; }
+.edit-actions .btn-outline { border-color: rgba(255,255,255,0.3); }
+.edit-actions .btn-outline:hover { background: rgba(255,255,255,0.1); }
 
 .profile-stats-bar {
     background: white;
