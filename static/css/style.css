@@ -244,9 +244,24 @@ a:hover { text-decoration: underline; }
 .hero-content { position: relative; z-index: 1; max-width: 600px; margin: 0 auto; }
 
 .hero-content h1 {
-    font-size: 2.2rem;
+    font-size: 2.8rem;
     font-weight: 700;
-    margin-bottom: 12px;
+    margin-bottom: 8px;
+    letter-spacing: 4px;
+}
+
+.hero-subtitle {
+    font-size: 1.4rem;
+    font-weight: 300;
+    opacity: 0.95;
+    margin-bottom: 8px;
+    letter-spacing: 6px;
+}
+
+.hero-desc {
+    font-size: 0.95rem;
+    opacity: 0.75;
+    margin-bottom: 24px;
 }
 
 .hero-content p {
