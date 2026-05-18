@@ -376,7 +376,7 @@ async function loadPostDetail(postId) {
                     </div>
                 ` : `<p style="color:var(--text-light);font-size:0.9rem;margin-bottom:16px"><a href="#" onclick="showAuthModal('login');return false">登录</a> 后可以评论</p>`}
                 <div class="comment-list">
-                    ${post.comments.map(c => renderComment(c)).join('')}
+                    ${renderCommentTree(post.comments)}
                 </div>
             </div>
         </div>`;
@@ -384,17 +384,100 @@ async function loadPostDetail(postId) {
 
 function renderComment(comment) {
     const initial = comment.author.nickname.charAt(0).toUpperCase();
+    const replyToHtml = comment.reply_to
+        ? `<span class="reply-to-tag">回复 <span class="reply-to-name">@${escapeHtml(comment.reply_to.nickname)}</span></span>`
+        : '';
+    const replyBtnHtml = state.currentUser
+        ? `<button class="comment-reply-btn" onclick="showReplyInput('${comment.id}', '${escapeHtml(comment.author.nickname)}')"><i class="fas fa-reply"></i> 回复</button>`
+        : '';
+
     return `
-        <div class="comment-item">
+        <div class="comment-item" id="comment-${comment.id}">
             <div class="comment-avatar" onclick="showPage('profile','${comment.author.id}')" style="cursor:pointer">${initial}</div>
             <div class="comment-body">
                 <div class="comment-meta">
                     <span class="comment-author" onclick="showPage('profile','${comment.author.id}')" style="cursor:pointer">${comment.author.nickname}</span>
+                    ${replyToHtml}
                     <span class="comment-time">${comment.time_ago}</span>
                 </div>
                 <div class="comment-text">${escapeHtml(comment.content)}</div>
+                <div class="comment-actions">${replyBtnHtml}</div>
             </div>
         </div>`;
+}
+
+// 将扁平评论列表组织为嵌套树结构
+function renderCommentTree(comments) {
+    // 分离顶级评论和回复
+    const topComments = comments.filter(c => !c.parent_id);
+    const replies = comments.filter(c => c.parent_id);
+
+    // 按 parent_id 分组回复
+    const replyMap = {};
+    replies.forEach(r => {
+        if (!replyMap[r.parent_id]) replyMap[r.parent_id] = [];
+        replyMap[r.parent_id].push(r);
+    });
+
+    // 递归渲染
+    function renderWithReplies(comment, depth = 0) {
+        const commentHtml = renderComment(comment);
+        const childReplies = replyMap[comment.id] || [];
+
+        if (childReplies.length > 0) {
+            const repliesHtml = childReplies.map(r => renderWithReplies(r, depth + 1)).join('');
+            return commentHtml + `<div class="comment-replies">${repliesHtml}</div>`;
+        }
+        return commentHtml;
+    }
+
+    return topComments.map(c => renderWithReplies(c)).join('');
+}
+
+// 显示内联回复输入框
+function showReplyInput(commentId, nickname) {
+    // 移除其他已打开的回复框
+    document.querySelectorAll('.reply-input-area').forEach(el => el.remove());
+
+    const commentEl = document.getElementById(`comment-${commentId}`);
+    if (!commentEl) return;
+
+    const replyArea = document.createElement('div');
+    replyArea.className = 'reply-input-area';
+    replyArea.innerHTML = `
+        <div class="reply-input-header">
+            <span>回复 @${nickname}</span>
+            <button class="reply-cancel-btn" onclick="this.closest('.reply-input-area').remove()">取消</button>
+        </div>
+        <textarea class="reply-textarea" id="replyInput-${commentId}" placeholder="写下你的回复..." rows="2"></textarea>
+        <button class="btn btn-primary btn-sm" onclick="submitReply('${commentId}')">发送回复</button>
+    `;
+
+    commentEl.appendChild(replyArea);
+    document.getElementById(`replyInput-${commentId}`).focus();
+}
+
+// 提交回复
+async function submitReply(parentId) {
+    const input = document.getElementById(`replyInput-${parentId}`);
+    const content = input ? input.value.trim() : '';
+    if (!content) {
+        showToast('回复内容不能为空', 'error');
+        return;
+    }
+
+    // 找到当前帖子ID
+    const res = await api(`/api/posts/${state.currentPostId}/comments`, {
+        method: 'POST',
+        body: JSON.stringify({ content, parent_id: parentId })
+    });
+
+    if (res.success) {
+        showToast('回复成功', 'success');
+        loadPostDetail(state.currentPostId);
+    } else {
+        showToast(res.message, 'error');
+    }
 }
 
 // ============ 点赞 ============

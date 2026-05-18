@@ -156,6 +156,7 @@ class Comment(db.Model):
     post_id = db.Column(db.String(8), db.ForeignKey('posts.id'), nullable=False)
     user_id = db.Column(db.String(8), db.ForeignKey('users.id'), nullable=False)
     content = db.Column(db.Text, nullable=False)
+    parent_id = db.Column(db.String(8), db.ForeignKey('comments.id'), default=None, nullable=True)
     created_at = db.Column(db.Float, default=time.time)
 
 
@@ -734,9 +735,21 @@ def get_post(post_id):
     comment_list = []
     for c in post_comments:
         c_author = User.query.get(c.user_id)
+        reply_to = None
+        if c.parent_id:
+            parent_comment = Comment.query.get(c.parent_id)
+            if parent_comment:
+                parent_author = User.query.get(parent_comment.user_id)
+                reply_to = {
+                    'id': parent_comment.id,
+                    'nickname': parent_author.nickname if parent_author else '匿名',
+                    'content': parent_comment.content[:50] + ('...' if len(parent_comment.content) > 50 else ''),
+                }
         comment_list.append({
             'id': c.id,
             'content': c.content,
+            'parent_id': c.parent_id,
+            'reply_to': reply_to,
             'created_at': c.created_at,
             'time_ago': time_ago(c.created_at),
             'author': {
@@ -835,6 +848,7 @@ def toggle_like(post_id):
 def add_comment(post_id):
     data = request.get_json()
     content = data.get('content', '').strip()
+    parent_id = data.get('parent_id', None)
 
     if not content:
         return jsonify({'success': False, 'message': '评论内容不能为空'})
@@ -843,29 +857,53 @@ def add_comment(post_id):
     if not post:
         return jsonify({'success': False, 'message': '帖子不存在'})
 
+    # 验证 parent_id：如果指定了回复目标，必须存在且属于同一帖子
+    if parent_id:
+        parent_comment = Comment.query.get(parent_id)
+        if not parent_comment:
+            return jsonify({'success': False, 'message': '回复的评论不存在'})
+        if parent_comment.post_id != post_id:
+            return jsonify({'success': False, 'message': '不能回复其他帖子的评论'})
+
     comment = Comment(
         id=generate_id(),
         post_id=post_id,
         user_id=session['user_id'],
-        content=content
+        content=content,
+        parent_id=parent_id,
     )
     db.session.add(comment)
     db.session.commit()
 
     user = User.query.get(session['user_id'])
 
+    # 构建返回数据
+    result_comment = {
+        'id': comment.id,
+        'content': comment.content,
+        'parent_id': comment.parent_id,
+        'time_ago': time_ago(comment.created_at),
+        'author': {
+            'id': user.id,
+            'nickname': user.nickname,
+            'avatar': user.avatar or ''
+        }
+    }
+
+    # 如果是回复，附带被回复信息
+    if parent_id:
+        parent_comment = Comment.query.get(parent_id)
+        if parent_comment:
+            parent_author = User.query.get(parent_comment.user_id)
+            result_comment['reply_to'] = {
+                'id': parent_comment.id,
+                'nickname': parent_author.nickname if parent_author else '匿名',
+                'content': parent_comment.content[:50] + ('...' if len(parent_comment.content) > 50 else ''),
+            }
+
     return jsonify({
         'success': True,
-        'comment': {
-            'id': comment.id,
-            'content': comment.content,
-            'time_ago': time_ago(comment.created_at),
-            'author': {
-                'id': user.id,
-                'nickname': user.nickname,
-                'avatar': user.avatar or ''
-            }
-        }
+        'comment': result_comment
     })
 
 
@@ -939,7 +977,8 @@ def export_backup_json():
         for c in Comment.query.all():
             data['comments'].append({
                 'id': c.id, 'post_id': c.post_id, 'user_id': c.user_id,
-                'content': c.content, 'created_at': c.created_at,
+                'content': c.content, 'parent_id': c.parent_id,
+                'created_at': c.created_at,
             })
 
         for t in Tag.query.all():
@@ -1096,6 +1135,7 @@ def restore_from_data(data):
         db.session.add(Comment(
             id=c_data['id'], post_id=c_data['post_id'],
             user_id=c_data['user_id'], content=c_data['content'],
+            parent_id=c_data.get('parent_id', None),
             created_at=c_data.get('created_at', time.time()),
         ))
         restored['comments'] += 1
@@ -1493,10 +1533,10 @@ def init_db():
         try:
             db.create_all()
 
-            # 检查并迁移：添加 email 列
-            email_exists = False
             is_postgres = 'postgresql' in str(db.engine.url)
 
+            # --- 迁移1：添加 email 列 ---
+            email_exists = False
             if is_postgres:
                 result = db.session.execute(db.text(
                     "SELECT column_name FROM information_schema.columns "
@@ -1504,7 +1544,6 @@ def init_db():
                 ))
                 email_exists = result.fetchone() is not None
             else:
-                # SQLite 方式
                 result = db.session.execute(db.text("PRAGMA table_info(users)"))
                 email_exists = any(row[1] == 'email' for row in result)
 
@@ -1515,13 +1554,34 @@ def init_db():
                 ))
                 db.session.commit()
                 print('✅ email 列已添加，旧数据完整保留')
+
+            # --- 迁移2：添加 parent_id 列（评论回复功能） ---
+            parent_id_exists = False
+            if is_postgres:
+                result = db.session.execute(db.text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='comments' AND column_name='parent_id'"
+                ))
+                parent_id_exists = result.fetchone() is not None
             else:
+                result = db.session.execute(db.text("PRAGMA table_info(comments)"))
+                parent_id_exists = any(row[1] == 'parent_id' for row in result)
+
+            if not parent_id_exists:
+                print('🔄 迁移：为 comments 表添加 parent_id 列（保留旧数据）...')
+                db.session.execute(db.text(
+                    "ALTER TABLE comments ADD COLUMN parent_id VARCHAR(8) DEFAULT NULL"
+                ))
+                db.session.commit()
+                print('✅ parent_id 列已添加，旧数据完整保留')
+
+            if email_exists and parent_id_exists:
                 print('✅ 数据库表结构正常')
 
         except Exception as e:
             err = str(e)
-            if 'does not exist' in err and 'users' in err:
-                print('🔄 users 表不存在，创建所有表...')
+            if 'does not exist' in err and ('users' in err or 'comments' in err):
+                print('🔄 表不存在，创建所有表...')
                 db.create_all()
                 print('✅ 数据库表已创建')
             elif 'already exists' in err or 'duplicate' in err:
