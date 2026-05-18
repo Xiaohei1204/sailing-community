@@ -750,6 +750,22 @@ a:hover { text-decoration: underline; }
     .comment-replies { margin-left: 20px; padding-left: 10px; }
 }
 
+/* 站长标识 */
+.role-badge {
+    display: inline-block; font-size: 0.65rem; padding: 1px 6px;
+    border-radius: 4px; vertical-align: middle; margin-left: 4px;
+    font-weight: 500; letter-spacing: 0.5px;
+}
+.admin-badge {
+    background: linear-gradient(135deg, #f5a623, #f7c948);
+    color: #fff; box-shadow: 0 1px 3px rgba(245,166,35,0.3);
+}
+
+.avatar-admin {
+    background: linear-gradient(135deg, #f5a623, #f7c948) !important;
+    color: #fff !important; box-shadow: 0 0 0 2px #f5a623;
+}
+
 .back-btn {
     display: inline-flex;
     align-items: center;

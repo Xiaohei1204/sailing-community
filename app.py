@@ -77,6 +77,7 @@ class User(db.Model):
     email = db.Column(db.String(120), default='')
     avatar = db.Column(db.String(500), default='')
     bio = db.Column(db.String(500), default='热爱帆船运动')
+    role = db.Column(db.String(20), default='user')
     created_at = db.Column(db.Float, default=time.time)
 
     def to_dict(self):
@@ -87,7 +88,8 @@ class User(db.Model):
             'email': self.email or '',
             'has_email': bool(self.email),
             'avatar': self.avatar or '',
-            'bio': self.bio or ''
+            'bio': self.bio or '',
+            'role': self.role or 'user',
         }
 
 
@@ -520,6 +522,7 @@ def get_user(user_id):
             'username': user.username,
             'nickname': user.nickname,
             'avatar': user.avatar or '',
+            'role': user.role or 'user',
             'bio': user.bio or '',
             'post_count': post_count,
             'joined': time_ago(user.created_at)
@@ -629,7 +632,8 @@ def get_posts():
             'author': {
                 'id': author.id if author else '',
                 'nickname': author.nickname if author else '匿名',
-                'avatar': author.avatar if author else ''
+                'avatar': author.avatar if author else '',
+                'role': author.role if author else 'user'
             }
         })
 
@@ -755,7 +759,8 @@ def get_post(post_id):
             'author': {
                 'id': c_author.id if c_author else '',
                 'nickname': c_author.nickname if c_author else '匿名',
-                'avatar': c_author.avatar if c_author else ''
+                'avatar': c_author.avatar if c_author else '',
+                'role': c_author.role if c_author else 'user'
             }
         })
 
@@ -783,7 +788,8 @@ def get_post(post_id):
             'author': {
                 'id': author.id if author else '',
                 'nickname': author.nickname if author else '匿名',
-                'avatar': author.avatar if author else ''
+                'avatar': author.avatar if author else '',
+                'role': author.role if author else 'user'
             },
             'comments': comment_list
         }
@@ -886,7 +892,8 @@ def add_comment(post_id):
         'author': {
             'id': user.id,
             'nickname': user.nickname,
-            'avatar': user.avatar or ''
+            'avatar': user.avatar or '',
+            'role': user.role or 'user'
         }
     }
 
@@ -962,6 +969,7 @@ def export_backup_json():
                 'id': u.id, 'username': u.username, 'password': u.password,
                 'nickname': u.nickname, 'email': u.email or '',
                 'avatar': u.avatar or '', 'bio': u.bio or '',
+                'role': u.role or 'user',
                 'created_at': u.created_at,
             })
 
@@ -1098,6 +1106,7 @@ def restore_from_data(data):
             password=u_data['password'], nickname=u_data['nickname'],
             email=u_data.get('email', ''), avatar=u_data.get('avatar', ''),
             bio=u_data.get('bio', '热爱帆船运动'),
+            role=u_data.get('role', 'user'),
             created_at=u_data.get('created_at', time.time()),
         ))
         restored['users'] += 1
@@ -1575,8 +1584,39 @@ def init_db():
                 db.session.commit()
                 print('✅ parent_id 列已添加，旧数据完整保留')
 
-            if email_exists and parent_id_exists:
+            # --- 迁移3：添加 role 列（用户角色） ---
+            role_exists = False
+            if is_postgres:
+                result = db.session.execute(db.text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name='users' AND column_name='role'"
+                ))
+                role_exists = result.fetchone() is not None
+            else:
+                result = db.session.execute(db.text("PRAGMA table_info(users)"))
+                role_exists = any(row[1] == 'role' for row in result)
+
+            if not role_exists:
+                print('🔄 迁移：为 users 表添加 role 列（保留旧数据）...')
+                db.session.execute(db.text(
+                    "ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'user'"
+                ))
+                db.session.commit()
+                print('✅ role 列已添加，旧数据完整保留')
+
+            if email_exists and parent_id_exists and role_exists:
                 print('✅ 数据库表结构正常')
+
+            # 设置站长角色（首次迁移时）
+            if not role_exists or role_exists:
+                try:
+                    admin_user = User.query.filter_by(username='OP').first()
+                    if admin_user and admin_user.role != 'admin':
+                        admin_user.role = 'admin'
+                        db.session.commit()
+                        print(f'✅ 站长角色已设置: {admin_user.nickname}')
+                except Exception:
+                    pass
 
         except Exception as e:
             err = str(e)

@@ -96,9 +96,11 @@ function updateNavUser() {
     if (state.currentUser) {
         document.getElementById('navAuth').style.display = 'none';
         document.getElementById('navUser').style.display = 'flex';
-        document.getElementById('navNickname').textContent = state.currentUser.nickname;
+        const roleBadge = state.currentUser.role === 'admin' ? ' <span class="role-badge admin-badge">站长</span>' : '';
+        document.getElementById('navNickname').innerHTML = state.currentUser.nickname + roleBadge;
         const avatar = document.getElementById('navAvatar');
         avatar.textContent = state.currentUser.nickname.charAt(0).toUpperCase();
+        avatar.className = state.currentUser.role === 'admin' ? 'user-avatar-small avatar-admin' : 'user-avatar-small';
     } else {
         document.getElementById('navAuth').style.display = 'flex';
         document.getElementById('navUser').style.display = 'none';
@@ -236,14 +238,15 @@ function renderPostCard(post) {
         ? `<div class="post-tags">${post.tags.map(t => `<span class="post-tag" onclick="filterByTag('${t}')">${t}</span>`).join('')}</div>`
         : '';
     const initial = post.author.nickname.charAt(0).toUpperCase();
+    const roleBadge = post.author.role === 'admin' ? '<span class="role-badge admin-badge">站长</span>' : '';
 
     return `
         <div class="post-card">
             <div class="post-card-body">
                 <div class="post-card-header">
-                    <div class="post-author-avatar" onclick="showPage('profile','${post.author.id}')">${initial}</div>
+                    <div class="post-author-avatar ${post.author.role === 'admin' ? 'avatar-admin' : ''}" onclick="showPage('profile','${post.author.id}')">${initial}</div>
                     <div class="post-author-info">
-                        <div class="post-author-name" onclick="showPage('profile','${post.author.id}')" style="cursor:pointer">${post.author.nickname}</div>
+                        <div class="post-author-name" onclick="showPage('profile','${post.author.id}')" style="cursor:pointer">${post.author.nickname}${roleBadge}</div>
                         <div class="post-time">${post.time_ago}</div>
                     </div>
                 </div>
@@ -317,6 +320,8 @@ async function loadPostDetail(postId) {
 
     const post = res.post;
     const initial = post.author.nickname.charAt(0).toUpperCase();
+    const roleBadge = post.author.role === 'admin' ? '<span class="role-badge admin-badge">站长</span>' : '';
+    const avatarClass = post.author.role === 'admin' ? 'avatar-admin' : '';
 
     const imagesHtml = post.images.length > 0
         ? `<div class="detail-images">${post.images.map(src => `<img src="${src}" alt="帖子图片" onclick="openImageViewer('${src}')" loading="lazy">`).join('')}</div>`
@@ -338,9 +343,9 @@ async function loadPostDetail(postId) {
         <button class="back-btn" onclick="showPage('home')"><i class="fas fa-arrow-left"></i> 返回列表</button>
         <div class="detail-card">
             <div class="detail-header">
-                <div class="post-author-avatar" onclick="showPage('profile','${post.author.id}')" style="cursor:pointer">${initial}</div>
+                <div class="post-author-avatar ${avatarClass}" onclick="showPage('profile','${post.author.id}')" style="cursor:pointer">${initial}</div>
                 <div>
-                    <div class="post-author-name" onclick="showPage('profile','${post.author.id}')" style="cursor:pointer">${post.author.nickname}</div>
+                    <div class="post-author-name" onclick="showPage('profile','${post.author.id}')" style="cursor:pointer">${post.author.nickname}${roleBadge}</div>
                     <div class="post-time">${post.time_ago}</div>
                 </div>
             </div>
@@ -384,6 +389,8 @@ async function loadPostDetail(postId) {
 
 function renderComment(comment) {
     const initial = comment.author.nickname.charAt(0).toUpperCase();
+    const roleBadge = comment.author.role === 'admin' ? '<span class="role-badge admin-badge">站长</span>' : '';
+    const avatarClass = comment.author.role === 'admin' ? 'avatar-admin' : '';
     const replyToHtml = comment.reply_to
         ? `<span class="reply-to-tag">回复 <span class="reply-to-name">@${escapeHtml(comment.reply_to.nickname)}</span></span>`
         : '';
@@ -393,10 +400,10 @@ function renderComment(comment) {
 
     return `
         <div class="comment-item" id="comment-${comment.id}">
-            <div class="comment-avatar" onclick="showPage('profile','${comment.author.id}')" style="cursor:pointer">${initial}</div>
+            <div class="comment-avatar ${avatarClass}" onclick="showPage('profile','${comment.author.id}')" style="cursor:pointer">${initial}</div>
             <div class="comment-body">
                 <div class="comment-meta">
-                    <span class="comment-author" onclick="showPage('profile','${comment.author.id}')" style="cursor:pointer">${comment.author.nickname}</span>
+                    <span class="comment-author" onclick="showPage('profile','${comment.author.id}')" style="cursor:pointer">${comment.author.nickname}${roleBadge}</span>
                     ${replyToHtml}
                     <span class="comment-time">${comment.time_ago}</span>
                 </div>
@@ -706,12 +713,14 @@ async function loadProfile(userId) {
     const user = userRes.user;
     const posts = postsRes.success ? postsRes.posts : [];
     const initial = user.nickname.charAt(0).toUpperCase();
+    const roleBadge = user.role === 'admin' ? '<span class="role-badge admin-badge">站长</span>' : '';
+    const avatarClass = user.role === 'admin' ? 'avatar-admin' : '';
 
     container.innerHTML = `
         <button class="back-btn" onclick="showPage('home')"><i class="fas fa-arrow-left"></i> 返回</button>
         <div class="profile-header">
-            <div class="profile-avatar">${initial}</div>
-            <div class="profile-name">${escapeHtml(user.nickname)}</div>
+            <div class="profile-avatar ${avatarClass}">${initial}</div>
+            <div class="profile-name">${escapeHtml(user.nickname)}${roleBadge}</div>
             <div class="profile-bio">${escapeHtml(user.bio || '这个人很懒，什么都没写')}</div>
         </div>
         <div class="profile-stats-bar">
